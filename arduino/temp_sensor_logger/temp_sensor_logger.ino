@@ -1,0 +1,1481 @@
+/*
+ * DS18B20 Multi-Bus Temperature Logger
+ * =====================================
+ * Production-ready Arduino solution for reading 10 DS18B20 temperature sensors
+ * across two OneWire buses with SD card logging and Heroku cloud uploads.
+ *
+ * Hardware:
+ *   - Bus A: 5x DS18B20 sensors on digital pin 2
+ *   - Bus B: 5x DS18B20 sensors on digital pin 3
+ *   - SD card (SPI or onboard)
+ *   - WiFi-capable board (ESP32, ESP8266, MKR WiFi 1010, Uno R4 WiFi)
+ *
+ * Libraries required:
+ *   - OneWire
+ *   - DallasTemperature
+ *   - SD
+ *   - WiFi (board-specific)
+ *   - ArduinoJson
+ *   - NTPClient (optional, for ESP boards)
+ */
+
+// ============================================================================
+// CONFIGURATION - Modify these values for your setup
+// ============================================================================
+
+// WiFi credentials
+#define WIFI_SSID "myHotSpot"
+#define WIFI_PASS "ki11erWing$"
+
+// Heroku endpoint configuration
+#define HEROKU_URL                                                             \
+  "https://temp-logger-1770077582-8b1b2ec536f6.herokuapp.com/api/temps"
+#define API_KEY "36e6e1669f7302366f067627383705a0"
+
+// HTTP fallback URL (used when HTTPS fails)
+// Note: This requires adding an HTTP endpoint on the backend
+#define HEROKU_HTTP_URL                                                        \
+  "http://temp-logger-1770077582-8b1b2ec536f6.herokuapp.com/api/temps-http"
+
+// Enable HTTP fallback after HTTPS failures
+#define USE_HTTP_FALLBACK 1
+#define HTTPS_FAIL_COUNT_BEFORE_FALLBACK 3
+
+// Amazon Root CA 1 certificate (for Heroku HTTPS)
+// Valid until 2038-01-17
+const char AMAZON_ROOT_CA1[] PROGMEM = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIDQTCCAimgAwIBAgITBmyfz5m/jAo54vB4ikPmljZbyjANBgkqhkiG9w0BAQsF
+ADA5MQswCQYDVQQGEwJVUzEPMA0GA1UEChMGQW1hem9uMRkwFwYDVQQDExBBbWF6
+b24gUm9vdCBDQSAxMB4XDTE1MDUyNjAwMDAwMFoXDTM4MDExNzAwMDAwMFowOTEL
+MAkGA1UEBhMCVVMxDzANBgNVBAoTBkFtYXpvbjEZMBcGA1UEAxMQQW1hem9uIFJv
+b3QgQ0EgMTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALJ4gHHKeNXj
+ca9HgFB0fW7Y14h29Jlo91ghYPl0hAEvrAIthtOgQ3pOsqTQNroBvo3bSMgHFzZM
+9O6II8c+6zf1tRn4SWiw3te5djgdYZ6k/oI2peVKVuRF4fn9tBb6dNqcmzU5L/qw
+IFAGbHrQgLKm+a/sRxmPUDgH3KKHOVj4utWp+UhnMJbulHheb4mjUcAwhmahRWa6
+VOujw5H5SNz/0egwLX0tdHA114gk957EWW67c4cX8jJGKLhD+rcdqsq08p8kDi1L
+93FcXmn/6pUCyziKrlA4b9v7LWIbxcceVOF34GfID5yHI9Y/QCB/IIDEgEw+OyQm
+jgSubJrIqg0CAwEAAaNCMEAwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMC
+AYYwHQYDVR0OBBYEFIQYzIU07LwMlJQuCFmcx7IQTgoIMA0GCSqGSIb3DQEBCwUA
+A4IBAQCY8jdaQZChGsV2USggNiMOruYou6r4lK5IpDB/G/wkjUu0yKGX9rbxenDI
+U5PMCCjjmCXPI6T53iHTfIUJrU6adTrCC2qJeHZERxhlbI1Bjjt/msv0tadQ1wUs
+N+gDS63pYaACbvXy8MWy7Vu33PqUXHeeE6V/Uq2V8viTO96LXFvKWlJbYK8U90vv
+o/ufQJVtMVT8QtPHRh8jrdkPSHCa2XV4cdFyQzR1bldZwgJcJmApzyMZFo6IQ6XU
+5MsI+yMRQ+hDKXJioaldXgjUkK642M4UwtBV8ob2xJNDd2ZhwLnoQdeXeGADbkpy
+rqXRfboQnoZsG4q5WTP468SQvvG5
+-----END CERTIFICATE-----
+)EOF";
+
+// Device identification
+#define SITE_ID "industrial_site_01"
+#define DEVICE_ID "arduino_node_01"
+
+// Timing configuration
+#define SAMPLE_INTERVAL_MS 15000  // Sample every 15 seconds
+#define WIFI_TIMEOUT_MS 10000     // WiFi connection timeout
+#define UPLOAD_RETRY_MAX 5        // Max upload retries
+#define UPLOAD_RETRY_BASE_MS 1000 // Base retry delay (exponential backoff)
+#define UPLOAD_RETRY_MAX_MS 30000 // Max retry delay
+
+// Pin configuration
+#define BUS_A_PIN 2        // OneWire bus A
+#define BUS_B_PIN 3        // OneWire bus B
+#define SD_CS_PIN 4        // SD card chip select (adjust per board)
+#define LEVEL_SENSOR_PIN 5 // Liquid level sensor (XKC-Y25-T12V)
+
+// Sensor configuration
+#define SENSORS_PER_BUS 5
+#define MAX_SENSORS (SENSORS_PER_BUS * 2)
+
+// Upload queue configuration (ring buffer)
+#define UPLOAD_QUEUE_SIZE 10
+
+// Timezone offset in seconds (0 = UTC, -28800 = PST, etc.)
+#define TIMEZONE_OFFSET 0
+
+// ============================================================================
+// CALIBRATION VALUES (from stirred two-point calibration)
+// ============================================================================
+// Ice bath: 3.5°C actual, Boiling: 100°C actual
+// Index order: A1, A2, A3, A4, A5, B1, B2, B3, B4, B5
+
+const int CAL_SENSOR_COUNT = 10;
+
+float calSlope[CAL_SENSOR_COUNT] = {
+    1.0439, 1.0476, 1.0483, 1.0489, 1.0300, // Bus A: A1-A5 (stirred cal)
+    1.0418, 1.0474, 1.0467, 1.0489, 1.0489  // Bus B: B1-B5 (stirred cal)
+};
+
+float calOffset[CAL_SENSOR_COUNT] = {
+    -1.521, -2.199, -2.067, -2.070, -0.744, // Bus A: A1-A5 (stirred cal)
+    -1.771, -1.863, -1.472, -1.745, -1.745  // Bus B: B1-B5 (stirred cal)
+};
+
+// Sensor name mapping: index -> TD name
+// A1=TD03, A2=TD05, A3=TD04, A4=TD01, A5=TD02
+// B1=TD09, B2=TD07, B3=TD10, B4=TD08, B5=TD06
+const char *sensorNames[CAL_SENSOR_COUNT] = {
+    "TD03", "TD05", "TD04", "TD01", "TD02", // Bus A
+    "TD09", "TD07", "TD10", "TD08", "TD06"  // Bus B
+};
+
+// Display order: maps display position (0-9) to sensor index
+// Position 0=TD01, 1=TD02, 2=TD03, etc.
+// TD01=A4(idx 3), TD02=A5(idx 4), TD03=A1(idx 0), TD04=A3(idx 2), TD05=A2(idx
+// 1) TD06=B5(idx 9), TD07=B2(idx 6), TD08=B4(idx 8), TD09=B1(idx 5),
+// TD10=B3(idx 7)
+const uint8_t displayOrder[CAL_SENSOR_COUNT] = {
+    3, 4, 0, 2, 1, // TD01-TD05 sensor indices
+    9, 6, 8, 5, 7  // TD06-TD10 sensor indices
+};
+
+// Level sensor name
+#define LEVEL_SENSOR_NAME "LL01"
+
+// Apply calibration to raw reading
+float calibrate(int sensorIndex, float rawTemp) {
+  if (sensorIndex >= 0 && sensorIndex < CAL_SENSOR_COUNT) {
+    return (rawTemp * calSlope[sensorIndex]) + calOffset[sensorIndex];
+  }
+  return rawTemp; // Return uncalibrated if index out of range
+}
+
+// ============================================================================
+// BOARD-SPECIFIC INCLUDES AND DEFINITIONS
+// ============================================================================
+
+// Detect board and include appropriate libraries
+#if defined(ESP32)
+#define BOARD_NAME "ESP32"
+#include <HTTPClient.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <time.h>
+#define HTTPS_SUPPORTED 1
+#define USE_BUILTIN_TIME 1
+
+#elif defined(ESP8266)
+#define BOARD_NAME "ESP8266"
+#include <ESP8266HTTPClient.h>
+#include <ESP8266WiFi.h>
+#include <WiFiClientSecure.h>
+#include <time.h>
+#define HTTPS_SUPPORTED 1
+#define USE_BUILTIN_TIME 1
+
+#elif defined(ARDUINO_SAMD_MKRWIFI1010)
+#define BOARD_NAME "MKR WiFi 1010"
+#include <WiFiNINA.h>
+#include <WiFiSSLClient.h>
+#define HTTPS_SUPPORTED 1
+#define USE_BUILTIN_TIME 0
+
+#elif defined(ARDUINO_UNOR4_WIFI)
+#define BOARD_NAME "Arduino Uno R4 WiFi"
+#include <WiFiS3.h>
+#include <WiFiSSLClient.h>
+#define HTTPS_SUPPORTED 1
+#define USE_BUILTIN_TIME 0
+
+#else
+#define BOARD_NAME "Generic Arduino WiFi"
+#include <WiFi.h>
+#define HTTPS_SUPPORTED 0
+#define USE_BUILTIN_TIME 0
+#endif
+
+// Common includes
+#include <ArduinoJson.h>
+#include <DallasTemperature.h>
+#include <OneWire.h>
+#include <SD.h>
+#include <SPI.h>
+
+// ============================================================================
+// FORWARD DECLARATIONS (required for Arduino IDE)
+// ============================================================================
+struct SensorInfo;
+struct SensorReading;
+struct UploadBatch;
+
+// ============================================================================
+// DATA STRUCTURES
+// ============================================================================
+
+// Sensor information structure
+struct SensorInfo {
+  uint8_t rom[8];       // 64-bit ROM address
+  char busId;           // 'A' or 'B'
+  uint8_t pin;          // Physical pin number
+  char logicalName[16]; // Human-readable name
+  bool present;         // Whether sensor was found at startup
+  float lastTemp;       // Last reading
+  bool lastReadOk;      // Last read status
+};
+
+// Reading structure for upload queue
+struct SensorReading {
+  char busId;
+  uint8_t pin;
+  uint8_t rom[8];
+  uint8_t sensorIndex; // Index for calibration/name lookup
+  float rawTempC;      // Raw temperature before calibration
+  float tempC;         // Calibrated temperature
+  bool ok;
+};
+
+// Queued upload batch
+struct UploadBatch {
+  char timestamp[25];
+  SensorReading readings[MAX_SENSORS];
+  uint8_t readingCount;
+  uint8_t retryCount;
+  bool valid;
+  bool levelSensorState; // true = liquid detected
+};
+
+// ============================================================================
+// FUNCTION PROTOTYPES (required for Arduino IDE)
+// ============================================================================
+void logToSD(const char *timestamp, SensorReading *readings, uint8_t count,
+             bool levelState);
+void readAllSensors(SensorReading *readings, uint8_t *readingCount,
+                    uint8_t *okCount, uint8_t *errorCount);
+void queueUpload(const char *timestamp, SensorReading *readings, uint8_t count,
+                 bool levelState);
+void buildJsonPayload(UploadBatch *batch, char *buffer, size_t bufferSize);
+bool uploadBatch(UploadBatch *batch);
+
+// Serial command handling
+void processSerialCommands();
+void printHelp();
+void listFiles();
+void listDirectory(File dir, int indent);
+void dumpFile(const char *path);
+void dumpAllLogs();
+void showStatus();
+
+// ============================================================================
+// GLOBAL OBJECTS AND VARIABLES
+// ============================================================================
+
+// OneWire buses
+OneWire oneWireBusA(BUS_A_PIN);
+OneWire oneWireBusB(BUS_B_PIN);
+
+// DallasTemperature instances
+DallasTemperature sensorsBusA(&oneWireBusA);
+DallasTemperature sensorsBusB(&oneWireBusB);
+
+// Sensor registry
+SensorInfo sensorRegistry[MAX_SENSORS];
+uint8_t sensorCount = 0;
+
+// Upload queue (ring buffer)
+UploadBatch uploadQueue[UPLOAD_QUEUE_SIZE];
+uint8_t queueHead = 0;
+uint8_t queueTail = 0;
+uint8_t queueCount = 0;
+
+// Timing
+unsigned long lastSampleTime = 0;
+unsigned long lastUploadAttempt = 0;
+unsigned long currentRetryDelay = UPLOAD_RETRY_BASE_MS;
+
+// State tracking
+bool sdAvailable = false;
+bool wifiConnected = false;
+bool ntpSynced = false;
+unsigned long bootTime = 0;
+
+// HTTPS failure tracking for HTTP fallback
+uint8_t httpsFailCount = 0;
+bool useHttpFallback = false;
+
+// Current date for log file rotation
+char currentLogDate[12] = "";
+char currentLogPath[32] = "";
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
+// Convert ROM address to hex string
+void romToString(const uint8_t *rom, char *buffer) {
+  for (int i = 0; i < 8; i++) {
+    sprintf(buffer + (i * 2), "%02X", rom[i]);
+  }
+  buffer[16] = '\0';
+}
+
+// Print ROM address to Serial
+void printRom(const uint8_t *rom) {
+  char romStr[17];
+  romToString(rom, romStr);
+  Serial.print(romStr);
+}
+
+// Get current timestamp in ISO format
+void getTimestamp(char *buffer, size_t bufferSize) {
+#if USE_BUILTIN_TIME
+  if (ntpSynced) {
+    time_t now = time(nullptr) + TIMEZONE_OFFSET;
+    struct tm *timeinfo = gmtime(&now);
+    strftime(buffer, bufferSize, "%Y-%m-%dT%H:%M:%SZ", timeinfo);
+    return;
+  }
+#endif
+  // Fallback to uptime-based timestamp
+  unsigned long uptime = (millis() - bootTime) / 1000;
+  unsigned long hours = uptime / 3600;
+  unsigned long mins = (uptime % 3600) / 60;
+  unsigned long secs = uptime % 60;
+  snprintf(buffer, bufferSize, "UPTIME+%04lu:%02lu:%02lu", hours, mins, secs);
+}
+
+// Get current date string for log file rotation
+void getCurrentDate(char *buffer) {
+#if USE_BUILTIN_TIME
+  if (ntpSynced) {
+    time_t now = time(nullptr) + TIMEZONE_OFFSET;
+    struct tm *timeinfo = gmtime(&now);
+    strftime(buffer, 11, "%Y-%m-%d", timeinfo);
+    return;
+  }
+#endif
+  strcpy(buffer, "no-date");
+}
+
+// ============================================================================
+// WIFI FUNCTIONS
+// ============================================================================
+
+void setupWiFi() {
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(WIFI_SSID);
+
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+  unsigned long startTime = millis();
+  while (WiFi.status() != WL_CONNECTED &&
+         (millis() - startTime) < WIFI_TIMEOUT_MS) {
+    delay(250);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiConnected = true;
+    Serial.println();
+    Serial.print("WiFi connected! IP: ");
+    Serial.println(WiFi.localIP());
+
+    // Initialize NTP if supported
+#if USE_BUILTIN_TIME
+    Serial.println("Syncing time via NTP...");
+    configTime(TIMEZONE_OFFSET, 0, "pool.ntp.org", "time.nist.gov");
+
+    // Wait for time sync (max 5 seconds)
+    unsigned long ntpStart = millis();
+    while (time(nullptr) < 1000000000 && (millis() - ntpStart) < 5000) {
+      delay(100);
+    }
+
+    if (time(nullptr) > 1000000000) {
+      ntpSynced = true;
+      Serial.println("NTP synced successfully");
+
+      char timeStr[25];
+      getTimestamp(timeStr, sizeof(timeStr));
+      Serial.print("Current time: ");
+      Serial.println(timeStr);
+    } else {
+      Serial.println("NTP sync failed, using uptime timestamps");
+    }
+#endif
+  } else {
+    wifiConnected = false;
+    Serial.println();
+    Serial.println(
+        "WiFi connection failed - continuing with local logging only");
+  }
+}
+
+void checkWiFiConnection() {
+  bool currentlyConnected = (WiFi.status() == WL_CONNECTED);
+
+  if (currentlyConnected && !wifiConnected) {
+    Serial.println("WiFi reconnected!");
+    wifiConnected = true;
+  } else if (!currentlyConnected && wifiConnected) {
+    Serial.println("WiFi disconnected - will retry");
+    wifiConnected = false;
+    // Don't immediately reconnect - let the next check handle it
+  } else if (!currentlyConnected) {
+    // Still disconnected, check if we should retry
+    static unsigned long lastReconnectAttempt = 0;
+    if (millis() - lastReconnectAttempt > 10000) {
+      Serial.println("Retrying WiFi connection...");
+      WiFi.begin(WIFI_SSID, WIFI_PASS);
+      lastReconnectAttempt = millis();
+    }
+  }
+}
+
+// ============================================================================
+// SD CARD FUNCTIONS
+// ============================================================================
+
+void setupSD() {
+  Serial.print("Initializing SD card... ");
+
+  if (SD.begin(SD_CS_PIN)) {
+    sdAvailable = true;
+    Serial.println("SD card ready");
+
+    // Create logs directory if it doesn't exist
+    if (!SD.exists("/logs")) {
+      SD.mkdir("/logs");
+      Serial.println("Created /logs directory");
+    }
+  } else {
+    sdAvailable = false;
+    Serial.println("SD card initialization failed!");
+  }
+}
+
+void updateLogFilePath() {
+  char dateStr[12];
+  getCurrentDate(dateStr);
+
+  // Check if date changed (for log rotation)
+  if (strcmp(dateStr, currentLogDate) != 0) {
+    strcpy(currentLogDate, dateStr);
+    snprintf(currentLogPath, sizeof(currentLogPath), "/logs/%s.csv", dateStr);
+
+    // Create header if file doesn't exist
+    if (sdAvailable && !SD.exists(currentLogPath)) {
+      File logFile = SD.open(currentLogPath, FILE_WRITE);
+      if (logFile) {
+        logFile.println("timestamp,device_id,sensor_name,bus,pin,rom,raw_temp_"
+                        "c,cal_temp_c,status");
+        logFile.close();
+        Serial.print("Created new log file: ");
+        Serial.println(currentLogPath);
+      }
+    }
+  }
+}
+
+void logToSD(const char *timestamp, SensorReading *readings, uint8_t count,
+             bool levelState) {
+  if (!sdAvailable) {
+    Serial.println("SD card not available - skipping local log");
+    return;
+  }
+
+  updateLogFilePath();
+
+  File logFile = SD.open(currentLogPath, FILE_WRITE);
+  if (!logFile) {
+    Serial.print("Failed to open log file: ");
+    Serial.println(currentLogPath);
+    return;
+  }
+
+  char romStr[17];
+
+  // Log temperature sensors (in TD01-TD10 order)
+  for (uint8_t displayPos = 0;
+       displayPos < CAL_SENSOR_COUNT && displayPos < count; displayPos++) {
+    uint8_t sensorIdx = displayOrder[displayPos];
+    // Find the reading for this sensor index
+    for (uint8_t i = 0; i < count; i++) {
+      if (readings[i].sensorIndex == sensorIdx) {
+        romToString(readings[i].rom, romStr);
+        const char *sensorName = sensorNames[sensorIdx];
+
+        // Format:
+        // timestamp,device_id,sensor_name,bus,pin,rom,raw_temp_c,cal_temp_c,status
+        logFile.print(timestamp);
+        logFile.print(",");
+        logFile.print(DEVICE_ID);
+        logFile.print(",");
+        logFile.print(sensorName);
+        logFile.print(",");
+        logFile.print(readings[i].busId);
+        logFile.print(",");
+        logFile.print(readings[i].pin);
+        logFile.print(",");
+        logFile.print(romStr);
+        logFile.print(",");
+
+        if (readings[i].ok) {
+          logFile.print(readings[i].rawTempC, 2);
+          logFile.print(",");
+          logFile.print(readings[i].tempC, 2);
+          logFile.println(",ok");
+        } else {
+          logFile.println("null,null,error");
+        }
+        break;
+      }
+    }
+  }
+
+  // Log level sensor
+  logFile.print(timestamp);
+  logFile.print(",");
+  logFile.print(DEVICE_ID);
+  logFile.print(",");
+  logFile.print(LEVEL_SENSOR_NAME);
+  logFile.print(",L,");
+  logFile.print(LEVEL_SENSOR_PIN);
+  logFile.print(",N/A,N/A,N/A,");
+  logFile.println(levelState ? "LIQUID" : "NONE");
+
+  logFile.flush();
+  logFile.close();
+
+  Serial.print("Logged ");
+  Serial.print(count);
+  Serial.print(" temps + level (");
+  Serial.print(levelState ? "LIQUID" : "NONE");
+  Serial.println(") to SD");
+}
+
+// ============================================================================
+// SENSOR DISCOVERY AND MANAGEMENT
+// ============================================================================
+
+void discoverSensors() {
+  Serial.println("\n=== Sensor Discovery ===");
+  sensorCount = 0;
+
+  // Initialize temperature libraries
+  sensorsBusA.begin();
+  sensorsBusB.begin();
+
+  // Discover sensors on Bus A
+  Serial.println("\nBus A (Pin 2):");
+  uint8_t countA = sensorsBusA.getDeviceCount();
+  Serial.print("  Found ");
+  Serial.print(countA);
+  Serial.println(" sensor(s)");
+
+  if (countA < SENSORS_PER_BUS) {
+    Serial.print("  WARNING: Expected ");
+    Serial.print(SENSORS_PER_BUS);
+    Serial.println(" sensors!");
+  }
+
+  DeviceAddress tempAddress;
+  for (uint8_t i = 0; i < countA && sensorCount < MAX_SENSORS; i++) {
+    if (sensorsBusA.getAddress(tempAddress, i)) {
+      SensorInfo *sensor = &sensorRegistry[sensorCount];
+      memcpy(sensor->rom, tempAddress, 8);
+      sensor->busId = 'A';
+      sensor->pin = BUS_A_PIN;
+      snprintf(sensor->logicalName, 16, "A%d", i + 1);
+      sensor->present = true;
+      sensor->lastTemp = 0;
+      sensor->lastReadOk = false;
+
+      Serial.print("  [");
+      Serial.print(sensor->logicalName);
+      Serial.print("] ROM: ");
+      printRom(sensor->rom);
+      Serial.println();
+
+      // Set resolution to 12-bit for accuracy
+      sensorsBusA.setResolution(tempAddress, 12);
+
+      sensorCount++;
+    }
+  }
+
+  // Discover sensors on Bus B
+  Serial.println("\nBus B (Pin 3):");
+  uint8_t countB = sensorsBusB.getDeviceCount();
+  Serial.print("  Found ");
+  Serial.print(countB);
+  Serial.println(" sensor(s)");
+
+  if (countB < SENSORS_PER_BUS) {
+    Serial.print("  WARNING: Expected ");
+    Serial.print(SENSORS_PER_BUS);
+    Serial.println(" sensors!");
+  }
+
+  for (uint8_t i = 0; i < countB && sensorCount < MAX_SENSORS; i++) {
+    if (sensorsBusB.getAddress(tempAddress, i)) {
+      SensorInfo *sensor = &sensorRegistry[sensorCount];
+      memcpy(sensor->rom, tempAddress, 8);
+      sensor->busId = 'B';
+      sensor->pin = BUS_B_PIN;
+      snprintf(sensor->logicalName, 16, "B%d", i + 1);
+      sensor->present = true;
+      sensor->lastTemp = 0;
+      sensor->lastReadOk = false;
+
+      Serial.print("  [");
+      Serial.print(sensor->logicalName);
+      Serial.print("] ROM: ");
+      printRom(sensor->rom);
+      Serial.println();
+
+      // Set resolution to 12-bit for accuracy
+      sensorsBusB.setResolution(tempAddress, 12);
+
+      sensorCount++;
+    }
+  }
+
+  Serial.println("\n=== Discovery Complete ===");
+  Serial.print("Total sensors found: ");
+  Serial.println(sensorCount);
+
+  if (sensorCount == 0) {
+    Serial.println("ERROR: No sensors found! Check wiring.");
+  }
+}
+
+// ============================================================================
+// TEMPERATURE READING
+// ============================================================================
+
+void readAllSensors(SensorReading *readings, uint8_t *readingCount,
+                    uint8_t *okCount, uint8_t *errorCount) {
+  *readingCount = 0;
+  *okCount = 0;
+  *errorCount = 0;
+
+  // Request temperatures from all sensors
+  sensorsBusA.requestTemperatures();
+  sensorsBusB.requestTemperatures();
+
+  // Wait for conversion (750ms for 12-bit resolution)
+  delay(750);
+
+  // Read each registered sensor
+  for (uint8_t i = 0; i < sensorCount; i++) {
+    SensorInfo *sensor = &sensorRegistry[i];
+    SensorReading *reading = &readings[*readingCount];
+
+    // Copy sensor info to reading
+    reading->busId = sensor->busId;
+    reading->pin = sensor->pin;
+    reading->sensorIndex = i;
+    memcpy(reading->rom, sensor->rom, 8);
+
+    // Read temperature from appropriate bus
+    float rawTemp;
+    if (sensor->busId == 'A') {
+      rawTemp = sensorsBusA.getTempC(sensor->rom);
+    } else {
+      rawTemp = sensorsBusB.getTempC(sensor->rom);
+    }
+
+    // Check for valid reading
+    // DEVICE_DISCONNECTED_C is -127, also check for unreasonable values
+    if (rawTemp == DEVICE_DISCONNECTED_C || rawTemp < -50 || rawTemp > 125) {
+      reading->rawTempC = 0;
+      reading->tempC = 0;
+      reading->ok = false;
+      sensor->lastReadOk = false;
+      (*errorCount)++;
+    } else {
+      // Store both raw and calibrated
+      reading->rawTempC = rawTemp;
+      float calibratedTemp = calibrate(i, rawTemp);
+      reading->tempC = calibratedTemp;
+      reading->ok = true;
+      sensor->lastTemp = calibratedTemp;
+      sensor->lastReadOk = true;
+      (*okCount)++;
+    }
+
+    (*readingCount)++;
+  }
+}
+
+// ============================================================================
+// CLOUD UPLOAD FUNCTIONS
+// ============================================================================
+
+// Add batch to upload queue
+void queueUpload(const char *timestamp, SensorReading *readings, uint8_t count,
+                 bool levelState) {
+  if (queueCount >= UPLOAD_QUEUE_SIZE) {
+    // Queue full - drop oldest entry
+    Serial.println("Upload queue full - dropping oldest batch");
+    queueTail = (queueTail + 1) % UPLOAD_QUEUE_SIZE;
+    queueCount--;
+  }
+
+  UploadBatch *batch = &uploadQueue[queueHead];
+  strncpy(batch->timestamp, timestamp, sizeof(batch->timestamp) - 1);
+  batch->timestamp[sizeof(batch->timestamp) - 1] = '\0';
+  memcpy(batch->readings, readings, sizeof(SensorReading) * count);
+  batch->readingCount = count;
+  batch->retryCount = 0;
+  batch->valid = true;
+  batch->levelSensorState = levelState;
+
+  queueHead = (queueHead + 1) % UPLOAD_QUEUE_SIZE;
+  queueCount++;
+
+  Serial.print("Queued upload batch (queue size: ");
+  Serial.print(queueCount);
+  Serial.println(")");
+}
+
+// Build JSON payload for upload
+void buildJsonPayload(UploadBatch *batch, char *buffer, size_t bufferSize) {
+  // Use ArduinoJson for efficient JSON building
+  StaticJsonDocument<2048> doc;
+
+  doc["site_id"] = SITE_ID;
+  doc["device_id"] = DEVICE_ID;
+  doc["timestamp"] = batch->timestamp;
+
+  JsonArray readings = doc.createNestedArray("readings");
+
+  char romStr[17];
+
+  // Add readings in TD01-TD10 order
+  for (uint8_t displayPos = 0;
+       displayPos < CAL_SENSOR_COUNT && displayPos < batch->readingCount;
+       displayPos++) {
+    uint8_t sensorIdx = displayOrder[displayPos];
+    // Find the reading for this sensor index
+    for (uint8_t i = 0; i < batch->readingCount; i++) {
+      if (batch->readings[i].sensorIndex == sensorIdx) {
+        JsonObject reading = readings.createNestedObject();
+        const char *sensorName = sensorNames[sensorIdx];
+        reading["sensor_name"] = sensorName;
+        reading["bus"] = String(batch->readings[i].busId);
+        reading["pin"] = batch->readings[i].pin;
+
+        romToString(batch->readings[i].rom, romStr);
+        reading["rom"] = romStr;
+
+        if (batch->readings[i].ok) {
+          reading["raw_temp_c"] =
+              serialized(String(batch->readings[i].rawTempC, 2));
+          reading["temp_c"] = serialized(String(batch->readings[i].tempC, 2));
+          reading["status"] = "ok";
+        } else {
+          reading["raw_temp_c"] = (char *)nullptr;
+          reading["temp_c"] = (char *)nullptr;
+          reading["status"] = "error";
+        }
+        break;
+      }
+    }
+  }
+
+  // Add level sensor data
+  JsonObject levelSensor = doc.createNestedObject("level_sensor");
+  levelSensor["sensor_name"] = LEVEL_SENSOR_NAME;
+  levelSensor["pin"] = LEVEL_SENSOR_PIN;
+  levelSensor["state"] = batch->levelSensorState ? "LIQUID" : "NONE";
+
+  serializeJson(doc, buffer, bufferSize);
+}
+
+// Upload a single batch
+bool uploadBatch(UploadBatch *batch) {
+  if (!wifiConnected) {
+    return false;
+  }
+
+  char jsonBuffer[2048];
+  buildJsonPayload(batch, jsonBuffer, sizeof(jsonBuffer));
+
+  Serial.print("Uploading batch from ");
+  Serial.print(batch->timestamp);
+  Serial.print(" (attempt ");
+  Serial.print(batch->retryCount + 1);
+  Serial.println(")");
+
+#if defined(ESP32) || defined(ESP8266)
+  HTTPClient http;
+
+#if HTTPS_SUPPORTED
+  WiFiClientSecure client;
+  client.setInsecure(); // Skip certificate verification (for development)
+  http.begin(client, HEROKU_URL);
+#else
+  http.begin(HEROKU_URL);
+#endif
+
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("X-API-Key", API_KEY);
+
+  int httpCode = http.POST(jsonBuffer);
+
+  if (httpCode > 0) {
+    Serial.print("Upload response code: ");
+    Serial.println(httpCode);
+
+    if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED) {
+      Serial.println("Upload successful!");
+      http.end();
+      return true;
+    } else {
+      Serial.print("Upload failed with code: ");
+      Serial.println(httpCode);
+      String response = http.getString();
+      Serial.println(response);
+    }
+  } else {
+    Serial.print("Upload error: ");
+    Serial.println(http.errorToString(httpCode));
+  }
+
+  http.end();
+  return false;
+
+#elif defined(ARDUINO_SAMD_MKRWIFI1010) || defined(ARDUINO_UNOR4_WIFI)
+
+#if USE_HTTP_FALLBACK
+  // Check if we should use HTTP fallback
+  if (useHttpFallback) {
+    Serial.println("Using HTTP fallback mode");
+
+    // Use regular WiFiClient for HTTP
+    WiFiClient httpClient;
+
+    String url = HEROKU_HTTP_URL;
+    url.remove(0, 7); // Remove "http://"
+    int pathStart = url.indexOf('/');
+    String host = url.substring(0, pathStart);
+    String path = url.substring(pathStart);
+
+    Serial.print("Connecting to ");
+    Serial.print(host);
+    Serial.print(" (HTTP)... (WiFi RSSI: ");
+    Serial.print(WiFi.RSSI());
+    Serial.println(" dBm)");
+
+    if (httpClient.connect(host.c_str(), 80)) {
+      httpClient.print("POST ");
+      httpClient.print(path);
+      httpClient.println(" HTTP/1.1");
+      httpClient.print("Host: ");
+      httpClient.println(host);
+      httpClient.println("Content-Type: application/json");
+      httpClient.print("X-API-Key: ");
+      httpClient.println(API_KEY);
+      httpClient.print("Content-Length: ");
+      httpClient.println(strlen(jsonBuffer));
+      httpClient.println("Connection: close");
+      httpClient.println();
+      httpClient.println(jsonBuffer);
+      httpClient.flush();
+
+      unsigned long timeout = millis();
+      while (httpClient.available() == 0) {
+        if (millis() - timeout > 10000) {
+          Serial.println("HTTP upload timeout");
+          httpClient.stop();
+          return false;
+        }
+        delay(10);
+      }
+
+      String statusLine = httpClient.readStringUntil('\n');
+      httpClient.stop();
+
+      if (statusLine.indexOf("200") > 0 || statusLine.indexOf("201") > 0) {
+        Serial.println("HTTP upload successful!");
+        return true;
+      } else {
+        Serial.print("HTTP upload failed: ");
+        Serial.println(statusLine);
+      }
+    } else {
+      Serial.println("HTTP connection failed");
+    }
+
+    return false;
+  }
+#endif
+
+  // Try HTTPS with root CA certificate
+  WiFiSSLClient client;
+  client.setTimeout(20000); // 20 second timeout for SSL handshake
+
+  // Parse host and path from URL
+  // Note: Simple parsing - assumes https://host/path format
+  String url = HEROKU_URL;
+  url.remove(0, 8); // Remove "https://"
+  int pathStart = url.indexOf('/');
+  String host = url.substring(0, pathStart);
+  String path = url.substring(pathStart);
+
+  Serial.print("Connecting to ");
+  Serial.print(host);
+  Serial.print(" (HTTPS)... (WiFi RSSI: ");
+  Serial.print(WiFi.RSSI());
+  Serial.println(" dBm)");
+
+  unsigned long connectStart = millis();
+  if (client.connect(host.c_str(), 443)) {
+    // Reset failure counter on successful connection
+    httpsFailCount = 0;
+
+    client.print("POST ");
+    client.print(path);
+    client.println(" HTTP/1.1");
+    client.print("Host: ");
+    client.println(host);
+    client.println("Content-Type: application/json");
+    client.print("X-API-Key: ");
+    client.println(API_KEY);
+    client.print("Content-Length: ");
+    client.println(strlen(jsonBuffer));
+    client.println("Connection: close");
+    client.println();
+    client.println(jsonBuffer);
+    client.flush(); // Ensure data is sent
+
+    // Wait for response (but don't read entire body)
+    unsigned long timeout = millis();
+    while (client.available() == 0) {
+      if (millis() - timeout > 10000) {
+        Serial.println("Upload timeout");
+        client.stop();
+        delay(500); // Allow WiFi stack to recover
+        return false;
+      }
+      delay(10); // Small delay to prevent tight loop
+    }
+
+    // Read just the status line to check for success
+    String statusLine = client.readStringUntil('\n');
+    client.stop(); // Close connection immediately after reading status
+    delay(250);    // Allow WiFi stack to fully close connection
+
+    if (statusLine.indexOf("200") > 0 || statusLine.indexOf("201") > 0) {
+      Serial.println("Upload successful!");
+      return true;
+    } else {
+      Serial.print("Upload failed: ");
+      Serial.println(statusLine);
+    }
+  } else {
+    unsigned long connectTime = millis() - connectStart;
+    Serial.print("HTTPS connection failed after ");
+    Serial.print(connectTime);
+    Serial.println(" ms");
+    Serial.print("  WiFi status: ");
+    Serial.println(WiFi.status());
+    Serial.print("  WiFi RSSI: ");
+    Serial.print(WiFi.RSSI());
+    Serial.println(" dBm");
+
+#if USE_HTTP_FALLBACK
+    // Track HTTPS failures for fallback logic
+    httpsFailCount++;
+    Serial.print("  HTTPS fail count: ");
+    Serial.print(httpsFailCount);
+    Serial.print("/");
+    Serial.println(HTTPS_FAIL_COUNT_BEFORE_FALLBACK);
+
+    if (httpsFailCount >= HTTPS_FAIL_COUNT_BEFORE_FALLBACK) {
+      Serial.println("  Switching to HTTP fallback mode!");
+      Serial.println(
+          "  Note: HTTP may not work directly with Heroku (HTTPS redirect)");
+      Serial.println("  Consider setting up an HTTP proxy or using "
+                     "ngrok/Cloudflare tunnel");
+      useHttpFallback = true;
+    }
+#endif
+
+    delay(1000); // Allow WiFi stack to recover
+  }
+
+  return false;
+
+#else
+  // Generic HTTP client (no HTTPS)
+  WiFiClient client;
+
+  String url = HEROKU_URL;
+  url.remove(0, 7); // Remove "http://"
+  int pathStart = url.indexOf('/');
+  String host = url.substring(0, pathStart);
+  String path = url.substring(pathStart);
+
+  if (client.connect(host.c_str(), 80)) {
+    client.print("POST ");
+    client.print(path);
+    client.println(" HTTP/1.1");
+    client.print("Host: ");
+    client.println(host);
+    client.println("Content-Type: application/json");
+    client.print("X-API-Key: ");
+    client.println(API_KEY);
+    client.print("Content-Length: ");
+    client.println(strlen(jsonBuffer));
+    client.println("Connection: close");
+    client.println();
+    client.println(jsonBuffer);
+
+    unsigned long timeout = millis();
+    while (client.available() == 0) {
+      if (millis() - timeout > 5000) {
+        Serial.println("Upload timeout");
+        client.stop();
+        return false;
+      }
+    }
+
+    String response = client.readString();
+    if (response.indexOf("200 OK") > 0 || response.indexOf("201 Created") > 0) {
+      Serial.println("Upload successful!");
+      client.stop();
+      return true;
+    }
+
+    client.stop();
+  }
+
+  return false;
+#endif
+}
+
+// Process upload queue
+void processUploadQueue() {
+  if (queueCount == 0 || !wifiConnected) {
+    return;
+  }
+
+  // Rate limit upload attempts
+  if (millis() - lastUploadAttempt < currentRetryDelay) {
+    return;
+  }
+
+  lastUploadAttempt = millis();
+
+  // Try to upload oldest batch in queue
+  UploadBatch *batch = &uploadQueue[queueTail];
+
+  if (batch->valid) {
+    if (uploadBatch(batch)) {
+      // Success - remove from queue
+      batch->valid = false;
+      queueTail = (queueTail + 1) % UPLOAD_QUEUE_SIZE;
+      queueCount--;
+      currentRetryDelay = UPLOAD_RETRY_BASE_MS; // Reset backoff
+    } else {
+      // Failed - apply exponential backoff
+      batch->retryCount++;
+
+      if (batch->retryCount >= UPLOAD_RETRY_MAX) {
+        Serial.println("Max retries reached - dropping batch");
+
+        // Optionally log failed upload to SD
+        if (sdAvailable) {
+          File failFile = SD.open("/unsent.jsonl", FILE_WRITE);
+          if (failFile) {
+            char jsonBuffer[2048];
+            buildJsonPayload(batch, jsonBuffer, sizeof(jsonBuffer));
+            failFile.println(jsonBuffer);
+            failFile.close();
+            Serial.println("Saved failed upload to /unsent.jsonl");
+          }
+        }
+
+        batch->valid = false;
+        queueTail = (queueTail + 1) % UPLOAD_QUEUE_SIZE;
+        queueCount--;
+        currentRetryDelay = UPLOAD_RETRY_BASE_MS;
+      } else {
+        // Exponential backoff
+        currentRetryDelay =
+            min(currentRetryDelay * 2, (unsigned long)UPLOAD_RETRY_MAX_MS);
+        Serial.print("Will retry in ");
+        Serial.print(currentRetryDelay / 1000);
+        Serial.println(" seconds");
+      }
+    }
+  }
+}
+
+// ============================================================================
+// SERIAL COMMAND HANDLING
+// ============================================================================
+
+bool loggingPaused = false;
+
+void printHelp() {
+  Serial.println(F("\n=== Serial Commands ==="));
+  Serial.println(F("  D - Dump all log files to serial"));
+  Serial.println(F("  L - List files on SD card"));
+  Serial.println(F("  P - Pause/Resume logging"));
+  Serial.println(F("  S - Show status"));
+  Serial.println(F("  H - Show this help"));
+  Serial.println(F("========================\n"));
+}
+
+void listFiles() {
+  if (!sdAvailable) {
+    Serial.println(F("ERROR: SD card not available"));
+    return;
+  }
+
+  Serial.println(F("\n=== SD Card Contents ==="));
+
+  // List root directory
+  File root = SD.open("/");
+  if (!root) {
+    Serial.println(F("ERROR: Cannot open root directory"));
+    return;
+  }
+
+  listDirectory(root, 0);
+  root.close();
+
+  Serial.println(F("========================\n"));
+}
+
+void listDirectory(File dir, int indent) {
+  while (true) {
+    File entry = dir.openNextFile();
+    if (!entry)
+      break;
+
+    // Print indent
+    for (int i = 0; i < indent; i++) {
+      Serial.print(F("  "));
+    }
+
+    Serial.print(entry.name());
+    if (entry.isDirectory()) {
+      Serial.println(F("/"));
+      listDirectory(entry, indent + 1);
+    } else {
+      Serial.print(F("  ("));
+      Serial.print(entry.size());
+      Serial.println(F(" bytes)"));
+    }
+    entry.close();
+  }
+}
+
+void dumpFile(const char *path) {
+  File file = SD.open(path);
+  if (!file) {
+    Serial.print(F("ERROR: Cannot open "));
+    Serial.println(path);
+    return;
+  }
+
+  Serial.print(F("--- File: "));
+  Serial.print(path);
+  Serial.print(F(" ("));
+  Serial.print(file.size());
+  Serial.println(F(" bytes) ---"));
+
+  while (file.available()) {
+    Serial.write(file.read());
+  }
+
+  file.close();
+  Serial.println(F("--- End of file ---"));
+}
+
+void dumpAllLogs() {
+  if (!sdAvailable) {
+    Serial.println(F("ERROR: SD card not available"));
+    return;
+  }
+
+  Serial.println(F("=== FILE DUMP START ==="));
+
+  // Open logs directory
+  File logsDir = SD.open("/logs");
+  if (!logsDir) {
+    Serial.println(F("No /logs directory found"));
+    Serial.println(F("=== FILE DUMP END ==="));
+    return;
+  }
+
+  int fileCount = 0;
+
+  while (true) {
+    File entry = logsDir.openNextFile();
+    if (!entry)
+      break;
+
+    if (!entry.isDirectory()) {
+      // Build full path
+      char fullPath[48];
+      snprintf(fullPath, sizeof(fullPath), "/logs/%s", entry.name());
+      entry.close();
+
+      dumpFile(fullPath);
+      fileCount++;
+    } else {
+      entry.close();
+    }
+  }
+
+  logsDir.close();
+
+  // Also dump unsent.jsonl if it exists
+  if (SD.exists("/unsent.jsonl")) {
+    dumpFile("/unsent.jsonl");
+    fileCount++;
+  }
+
+  Serial.print(F("Total files dumped: "));
+  Serial.println(fileCount);
+  Serial.println(F("=== FILE DUMP END ==="));
+}
+
+void showStatus() {
+  Serial.println(F("\n=== System Status ==="));
+
+  Serial.print(F("Board: "));
+  Serial.println(BOARD_NAME);
+
+  Serial.print(F("SD Card: "));
+  Serial.println(sdAvailable ? "OK" : "NOT AVAILABLE");
+
+  Serial.print(F("WiFi: "));
+  Serial.println(wifiConnected ? "CONNECTED" : "DISCONNECTED");
+
+  Serial.print(F("NTP Synced: "));
+  Serial.println(ntpSynced ? "YES" : "NO");
+
+  Serial.print(F("Logging: "));
+  Serial.println(loggingPaused ? "PAUSED" : "ACTIVE");
+
+  Serial.print(F("Sensors found: "));
+  Serial.println(sensorCount);
+
+  Serial.print(F("Upload queue: "));
+  Serial.print(queueCount);
+  Serial.println(F(" pending"));
+
+  // Show current log file info
+  if (sdAvailable && strlen(currentLogPath) > 0) {
+    Serial.print(F("Current log file: "));
+    Serial.println(currentLogPath);
+
+    if (SD.exists(currentLogPath)) {
+      File logFile = SD.open(currentLogPath);
+      if (logFile) {
+        Serial.print(F("Log file size: "));
+        Serial.print(logFile.size());
+        Serial.println(F(" bytes"));
+        logFile.close();
+      }
+    }
+  }
+
+  // Uptime
+  unsigned long uptime = (millis() - bootTime) / 1000;
+  unsigned long hours = uptime / 3600;
+  unsigned long mins = (uptime % 3600) / 60;
+  unsigned long secs = uptime % 60;
+  Serial.print(F("Uptime: "));
+  Serial.print(hours);
+  Serial.print(F("h "));
+  Serial.print(mins);
+  Serial.print(F("m "));
+  Serial.print(secs);
+  Serial.println(F("s"));
+
+  Serial.println(F("=====================\n"));
+}
+
+void processSerialCommands() {
+  if (Serial.available() > 0) {
+    char cmd = Serial.read();
+
+    // Ignore newlines and carriage returns
+    if (cmd == '\n' || cmd == '\r')
+      return;
+
+    switch (cmd) {
+    case 'D':
+    case 'd':
+      Serial.println(F("Dumping all log files..."));
+      dumpAllLogs();
+      break;
+
+    case 'L':
+    case 'l':
+      listFiles();
+      break;
+
+    case 'P':
+    case 'p':
+      loggingPaused = !loggingPaused;
+      Serial.print(F("Logging "));
+      Serial.println(loggingPaused ? "PAUSED" : "RESUMED");
+      break;
+
+    case 'S':
+    case 's':
+      showStatus();
+      break;
+
+    case 'H':
+    case 'h':
+    case '?':
+      printHelp();
+      break;
+
+    default:
+      Serial.print(F("Unknown command: "));
+      Serial.println(cmd);
+      printHelp();
+      break;
+    }
+  }
+}
+
+// ============================================================================
+// MAIN SAMPLING LOOP
+// ============================================================================
+
+void sampleAndLog() {
+  static SensorReading readings[MAX_SENSORS];
+  uint8_t readingCount, okCount, errorCount;
+
+  // Get current timestamp
+  char timestamp[25];
+  getTimestamp(timestamp, sizeof(timestamp));
+
+  // Read all temperature sensors
+  readAllSensors(readings, &readingCount, &okCount, &errorCount);
+
+  // Read level sensor
+  bool levelState = (digitalRead(LEVEL_SENSOR_PIN) == HIGH);
+
+  // Print summary
+  Serial.println("\n--- Sample Cycle ---");
+  Serial.print("Time: ");
+  Serial.println(timestamp);
+  Serial.print("Readings: ");
+  Serial.print(okCount);
+  Serial.print(" ok, ");
+  Serial.print(errorCount);
+  Serial.println(" error");
+
+  // Print individual readings with sensor names (in TD01-TD10 order)
+  for (uint8_t displayPos = 0;
+       displayPos < CAL_SENSOR_COUNT && displayPos < readingCount;
+       displayPos++) {
+    uint8_t sensorIdx = displayOrder[displayPos];
+    // Find the reading for this sensor index
+    for (uint8_t i = 0; i < readingCount; i++) {
+      if (readings[i].sensorIndex == sensorIdx) {
+        const char *sensorName = sensorNames[sensorIdx];
+        Serial.print("  ");
+        Serial.print(sensorName);
+        Serial.print(": ");
+        if (readings[i].ok) {
+          Serial.print("Raw:");
+          Serial.print(readings[i].rawTempC, 2);
+          Serial.print("C -> Cal:");
+          Serial.print(readings[i].tempC, 2);
+          Serial.println("C");
+        } else {
+          Serial.println("ERROR");
+        }
+        break;
+      }
+    }
+  }
+
+  // Print level sensor
+  Serial.print("  ");
+  Serial.print(LEVEL_SENSOR_NAME);
+  Serial.print(": ");
+  Serial.println(levelState ? "LIQUID DETECTED" : "NO LIQUID");
+
+  // Log to SD card (primary storage)
+  logToSD(timestamp, readings, readingCount, levelState);
+
+  // Queue for cloud upload
+  queueUpload(timestamp, readings, readingCount, levelState);
+}
+
+// ============================================================================
+// SETUP AND MAIN LOOP
+// ============================================================================
+
+void setup() {
+  // Initialize Serial
+  Serial.begin(115200);
+  while (!Serial && millis() < 3000) {
+    ; // Wait for serial port (with timeout for boards without USB connection)
+  }
+
+  bootTime = millis();
+
+  Serial.println("\n========================================");
+  Serial.println("DS18B20 Multi-Bus Temperature Logger");
+  Serial.println("========================================");
+  Serial.print("Board: ");
+  Serial.println(BOARD_NAME);
+  Serial.print("Site ID: ");
+  Serial.println(SITE_ID);
+  Serial.print("Device ID: ");
+  Serial.println(DEVICE_ID);
+  Serial.print("Sample interval: ");
+  Serial.print(SAMPLE_INTERVAL_MS / 1000);
+  Serial.println(" seconds");
+  Serial.print("Bus A pin: ");
+  Serial.println(BUS_A_PIN);
+  Serial.print("Bus B pin: ");
+  Serial.println(BUS_B_PIN);
+  Serial.print("Level sensor pin: ");
+  Serial.println(LEVEL_SENSOR_PIN);
+  Serial.println();
+
+  // Initialize level sensor pin
+  pinMode(LEVEL_SENSOR_PIN, INPUT);
+
+  // Initialize SD card
+  setupSD();
+
+  // Connect to WiFi
+  setupWiFi();
+
+  // Discover temperature sensors
+  discoverSensors();
+
+  Serial.println("\n========================================");
+  Serial.println("Initialization complete. Starting main loop...");
+  Serial.println("Serial commands: D=Dump, L=List, P=Pause, S=Status, H=Help");
+  Serial.println("========================================\n");
+}
+
+void loop() {
+  unsigned long currentTime = millis();
+
+  // Process serial commands (D=dump, L=list, P=pause, S=status, H=help)
+  processSerialCommands();
+
+  // Check WiFi connection
+  checkWiFiConnection();
+
+  // Non-blocking sample timing (skip if paused)
+  if (!loggingPaused && (currentTime - lastSampleTime >= SAMPLE_INTERVAL_MS)) {
+    lastSampleTime = currentTime;
+    sampleAndLog();
+  }
+
+  // Process upload queue
+  processUploadQueue();
+
+  // Small yield for WiFi stack (important for ESP boards)
+  yield();
+}
