@@ -33,9 +33,9 @@
 #define API_KEY "36e6e1669f7302366f067627383705a0"
 
 // HTTP fallback URL (used when HTTPS fails)
-// Note: This requires adding an HTTP endpoint on the backend
-#define HEROKU_HTTP_URL                                                        \
-  "http://temp-logger-1770077582-8b1b2ec536f6.herokuapp.com/api/temps-http"
+// Point to local proxy on Raspberry Pi that forwards to Heroku
+// Update PI_IP_ADDRESS to your Pi's local IP (e.g., 192.168.1.100)
+#define HEROKU_HTTP_URL "http://192.168.1.100:8080/api/temps"
 
 // Enable HTTP fallback after HTTPS failures
 #define USE_HTTP_FALLBACK 1
