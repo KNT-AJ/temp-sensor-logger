@@ -819,9 +819,18 @@ bool uploadBatch(UploadBatch *batch) {
   char jsonBuffer[2048];
   buildJsonPayload(batch, jsonBuffer, sizeof(jsonBuffer));
 
+  size_t len = strlen(jsonBuffer);
+  Serial.print("Generated JSON payload size: ");
+  Serial.println(len);
+
+  // Ensure previous prints are done
+  Serial.flush();
+  delay(50); // Small pause for stability
+
   // Print with a special prefix so the Pi script can detect it
   Serial.print("JSON_UPLOAD:");
   Serial.println(jsonBuffer);
+  Serial.flush(); // Ensure JSON is fully sent
 
   // We assume success since Serial is reliable.
   // The Pi will be responsible for the actual HTTP upload.
