@@ -342,7 +342,9 @@ void getTimestamp(char *buffer, size_t bufferSize) {
 // Get current date string for log file rotation
 void getCurrentDate(char *buffer) {
   if (timeStatus() != timeNotSet) {
-    snprintf(buffer, 11, "%04d-%02d-%02d", year(), month(), day());
+    // Use YYYYMMDD format (8 chars) to ensure filenames fit 8.3 limits (e.g.,
+    // 20260206.csv)
+    snprintf(buffer, 11, "%04d%02d%02d", year(), month(), day());
     return;
   }
   strcpy(buffer, "no-date");
