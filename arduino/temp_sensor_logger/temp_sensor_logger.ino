@@ -423,28 +423,28 @@ void setupWiFi() {
   }
 }
 
-void checkWiFiConnection() {
-  bool currentlyConnected = (WiFi.status() == WL_CONNECTED);
+// void checkWiFiConnection() {
+//   bool currentlyConnected = (WiFi.status() == WL_CONNECTED);
 
-  if (currentlyConnected && !wifiConnected) {
-    Serial.println("WiFi reconnected!");
-    Serial.print("IP Address: ");
-    Serial.println(WiFi.localIP());
-    wifiConnected = true;
-  } else if (!currentlyConnected && wifiConnected) {
-    Serial.println("WiFi disconnected - will retry");
-    wifiConnected = false;
-    // Don't immediately reconnect - let the next check handle it
-  } else if (!currentlyConnected) {
-    // Still disconnected, check if we should retry
-    static unsigned long lastReconnectAttempt = 0;
-    if (millis() - lastReconnectAttempt > 10000) {
-      Serial.println("Retrying WiFi connection...");
-      WiFi.begin(WIFI_SSID, WIFI_PASS);
-      lastReconnectAttempt = millis();
-    }
-  }
-}
+//   if (currentlyConnected && !wifiConnected) {
+//     Serial.println("WiFi reconnected!");
+//     Serial.print("IP Address: ");
+//     Serial.println(WiFi.localIP());
+//     wifiConnected = true;
+//   } else if (!currentlyConnected && wifiConnected) {
+//     Serial.println("WiFi disconnected - will retry");
+//     wifiConnected = false;
+//     // Don't immediately reconnect - let the next check handle it
+//   } else if (!currentlyConnected) {
+//     // Still disconnected, check if we should retry
+//     static unsigned long lastReconnectAttempt = 0;
+//     if (millis() - lastReconnectAttempt > 10000) {
+//       Serial.println("Retrying WiFi connection...");
+//       WiFi.begin(WIFI_SSID, WIFI_PASS);
+//       lastReconnectAttempt = millis();
+//     }
+//   }
+// }
 
 // ============================================================================
 // SD CARD FUNCTIONS
@@ -808,279 +808,26 @@ void buildJsonPayload(UploadBatch *batch, char *buffer, size_t bufferSize) {
   serializeJson(doc, buffer, bufferSize);
 }
 
-// Upload a single batch
-bool uploadBatch(UploadBatch *batch) {
-  if (!wifiConnected) {
-    return false;
-  }
+// ============================================================================
+// SERIAL UPLOAD (USB TETHERING) CONFIGURATION
+// ============================================================================
+// We are now sending data over USB Serial to the Pi, which handles the internet
+// connection. No WiFi libraries needed.
 
+// Upload a single batch via Serial
+bool uploadBatch(UploadBatch *batch) {
   char jsonBuffer[2048];
   buildJsonPayload(batch, jsonBuffer, sizeof(jsonBuffer));
 
-  Serial.print("Uploading batch from ");
-  Serial.print(batch->timestamp);
-  Serial.print(" (attempt ");
-  Serial.print(batch->retryCount + 1);
-  Serial.println(")");
+  // Print with a special prefix so the Pi script can detect it
+  Serial.print("JSON_UPLOAD:");
+  Serial.println(jsonBuffer);
 
-#if defined(ESP32) || defined(ESP8266)
-  HTTPClient http;
+  // We assume success since Serial is reliable.
+  // The Pi will be responsible for the actual HTTP upload.
+  Serial.println("Sent batch to Pi via Serial");
 
-#if HTTPS_SUPPORTED
-  WiFiClientSecure client;
-  client.setInsecure(); // Skip certificate verification (for development)
-  http.begin(client, HEROKU_URL);
-#else
-  http.begin(HEROKU_URL);
-#endif
-
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("X-API-Key", API_KEY);
-
-  int httpCode = http.POST(jsonBuffer);
-
-  if (httpCode > 0) {
-    Serial.print("Upload response code: ");
-    Serial.println(httpCode);
-
-    if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED) {
-      Serial.println("Upload successful!");
-      http.end();
-      return true;
-    } else {
-      Serial.print("Upload failed with code: ");
-      Serial.println(httpCode);
-      String response = http.getString();
-      Serial.println(response);
-    }
-  } else {
-    Serial.print("Upload error: ");
-    Serial.println(http.errorToString(httpCode));
-  }
-
-  http.end();
-  return false;
-
-#elif defined(ARDUINO_SAMD_MKRWIFI1010) || defined(ARDUINO_UNOR4_WIFI)
-
-  String url = HEROKU_URL;
-  bool isHttps = url.startsWith("https://");
-
-  String host;
-  int port;
-  String path;
-
-  // URL Parsing
-  if (isHttps) {
-    url.remove(0, 8); // Remove "https://"
-    port = 443;
-  } else {
-    url.remove(0, 7); // Remove "http://"
-    port = 80;
-  }
-
-  int pathStart = url.indexOf('/');
-  if (pathStart == -1) {
-    host = url;
-    path = "/";
-  } else {
-    host = url.substring(0, pathStart);
-    path = url.substring(pathStart);
-  }
-
-  // Handle custom ports (e.g. host:8080)
-  int portSep = host.indexOf(':');
-  if (portSep != -1) {
-    port = host.substring(portSep + 1).toInt();
-    host = host.substring(0, portSep);
-  }
-
-  Serial.print("Connecting to ");
-  Serial.print(host);
-  Serial.print(":");
-  Serial.print(port);
-  Serial.print(isHttps ? " (HTTPS)..." : " (HTTP)...");
-  Serial.print(" (WiFi RSSI: ");
-  Serial.print(WiFi.RSSI());
-  Serial.println(" dBm)");
-
-  unsigned long connectStart = millis();
-  bool connected = false;
-
-  if (isHttps) {
-    // HTTPS connection
-    WiFiSSLClient client;
-    client.setTimeout(20000);
-    // Explicitly set the CA cert (if supported by library version)
-    // client.setCACert(AMAZON_ROOT_CA1);
-
-    if (client.connect(host.c_str(), port)) {
-      connected = true;
-      client.print("POST ");
-      client.print(path);
-      client.println(" HTTP/1.1");
-      client.print("Host: ");
-      client.println(host);
-      client.println("Content-Type: application/json");
-      client.print("X-API-Key: ");
-      client.println(API_KEY);
-      client.print("Content-Length: ");
-      client.println(strlen(jsonBuffer));
-      client.println("Connection: close");
-      client.println();
-      client.println(jsonBuffer);
-      client.flush();
-
-      // Read response
-      unsigned long timeout = millis();
-      while (client.available() == 0) {
-        if (millis() - timeout > 10000) {
-          Serial.println("HTTPS upload timeout waiting for data");
-          client.stop();
-          return false;
-        }
-        delay(10);
-      }
-
-      String statusLine = client.readStringUntil('\n');
-      client.stop();
-
-      if (statusLine.indexOf("200") > 0 || statusLine.indexOf("201") > 0) {
-        Serial.println("Upload successful!");
-        httpsFailCount = 0;      // Reset fail count on success
-        consecutiveFailures = 0; // Reset watchdog
-        return true;
-      } else {
-        Serial.print("Upload failed: ");
-        Serial.println(statusLine);
-      }
-    }
-  } else {
-    // HTTP connection
-    WiFiClient client;
-    client.setTimeout(20000); // 20s connection timeout
-
-    if (client.connect(host.c_str(), port)) {
-      connected = true;
-      client.print("POST ");
-      client.print(path);
-      client.println(" HTTP/1.1");
-      client.print("Host: ");
-      client.println(host);
-      client.println("Content-Type: application/json");
-      client.print("X-API-Key: ");
-      client.println(API_KEY);
-      client.print("Content-Length: ");
-      client.println(strlen(jsonBuffer));
-      client.println("Connection: close");
-      client.println();
-      client.println(jsonBuffer);
-      client.flush();
-
-      // Read response
-      unsigned long timeout = millis();
-      while (client.available() == 0) {
-        if (millis() - timeout > 30000) { // Increased to 30s
-          Serial.println("HTTP upload timeout waiting for data");
-          client.stop();
-          return false;
-        }
-        delay(10);
-      }
-
-      String statusLine = client.readStringUntil('\n');
-      client.stop();
-
-      if (statusLine.indexOf("200") > 0 || statusLine.indexOf("201") > 0) {
-        Serial.println("Upload successful!");
-        consecutiveFailures = 0; // Reset watchdog
-        return true;
-      } else {
-        Serial.print("Upload failed: ");
-        Serial.println(statusLine);
-      }
-    }
-  }
-
-  if (!connected) {
-    unsigned long connectTime = millis() - connectStart;
-    Serial.print("Connection failed after ");
-    Serial.print(connectTime);
-    Serial.println(" ms");
-    Serial.print("  WiFi status: ");
-    Serial.println(WiFi.status());
-    Serial.print("  WiFi RSSI: ");
-    Serial.print(WiFi.RSSI());
-    Serial.println(" dBm");
-
-    // INCREMENT FAILURE COUNTER
-    consecutiveFailures++;
-    Serial.print("  Consecutive failures: ");
-    Serial.print(consecutiveFailures);
-    Serial.print("/");
-    Serial.println(MAX_CONSECUTIVE_FAILURES_BEFORE_RESET);
-
-    // Check for self-healing reset
-    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES_BEFORE_RESET) {
-      Serial.println(
-          "\n!!! CRITICAL: Too many failures. Initiating System Reset !!!");
-      delay(100);
-      NVIC_SystemReset(); // Hard Reset for ARM Cortex-M4
-    }
-  } else {
-    // If we connected but upload failed (e.g. 500 error), we still count it as
-    // a failure logic is handled inside "if (isHttps)" and "else" blocks above,
-    // but if we are here, 'connected' is false, so we handle connection errors.
-  }
-
-  return false;
-
-#else
-  // Generic HTTP client (no HTTPS)
-  WiFiClient client;
-
-  String url = HEROKU_URL;
-  url.remove(0, 7); // Remove "http://"
-  int pathStart = url.indexOf('/');
-  String host = url.substring(0, pathStart);
-  String path = url.substring(pathStart);
-
-  if (client.connect(host.c_str(), 80)) {
-    client.print("POST ");
-    client.print(path);
-    client.println(" HTTP/1.1");
-    client.print("Host: ");
-    client.println(host);
-    client.println("Content-Type: application/json");
-    client.print("X-API-Key: ");
-    client.println(API_KEY);
-    client.print("Content-Length: ");
-    client.println(strlen(jsonBuffer));
-    client.println("Connection: close");
-    client.println();
-    client.println(jsonBuffer);
-
-    unsigned long timeout = millis();
-    while (client.available() == 0) {
-      if (millis() - timeout > 5000) {
-        Serial.println("Upload timeout");
-        client.stop();
-        return false;
-      }
-    }
-
-    String response = client.readString();
-    if (response.indexOf("200 OK") > 0 || response.indexOf("201 Created") > 0) {
-      Serial.println("Upload successful!");
-      client.stop();
-      return true;
-    }
-
-    client.stop();
-  }
-
-  return false;
-#endif
+  return true;
 }
 
 // Process upload queue
