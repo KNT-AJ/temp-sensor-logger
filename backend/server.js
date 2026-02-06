@@ -101,20 +101,20 @@ const validatePayload = (body) => {
         errors.push(`readings[${index}].temp_c must be a number when status is 'ok'`);
       }
     });
-  });
-}
 
-// Validate environment_sensor (optional)
-if (body.environment_sensor) {
-  const env = body.environment_sensor;
-  if (typeof env.sensor_name !== 'string') errors.push('environment_sensor.sensor_name must be a string');
-  if (env.temp_c && typeof env.temp_c !== 'number') errors.push('environment_sensor.temp_c must be a number');
-  if (env.humidity && typeof env.humidity !== 'number') errors.push('environment_sensor.humidity must be a number');
-  if (env.pressure_hpa && typeof env.pressure_hpa !== 'number') errors.push('environment_sensor.pressure_hpa must be a number');
-  if (env.gas_resistance_ohms && typeof env.gas_resistance_ohms !== 'number') errors.push('environment_sensor.gas_resistance_ohms must be a number');
-}
+  }
 
-return errors;
+  // Validate environment_sensor (optional)
+  if (body.environment_sensor) {
+    const env = body.environment_sensor;
+    if (typeof env.sensor_name !== 'string') errors.push('environment_sensor.sensor_name must be a string');
+    if (env.temp_c && typeof env.temp_c !== 'number') errors.push('environment_sensor.temp_c must be a number');
+    if (env.humidity && typeof env.humidity !== 'number') errors.push('environment_sensor.humidity must be a number');
+    if (env.pressure_hpa && typeof env.pressure_hpa !== 'number') errors.push('environment_sensor.pressure_hpa must be a number');
+    if (env.gas_resistance_ohms && typeof env.gas_resistance_ohms !== 'number') errors.push('environment_sensor.gas_resistance_ohms must be a number');
+  }
+
+  return errors;
 };
 
 // Main temperature data endpoint
