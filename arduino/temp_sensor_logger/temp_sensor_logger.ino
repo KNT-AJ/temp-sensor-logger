@@ -16,8 +16,10 @@
  *   - SD
  *   - WiFi (board-specific)
  *   - ArduinoJson
- *   - NTPClient (optional, for ESP boards)
+ *   - TimeLib (for manual time management)
  */
+
+#include <TimeLib.h> // Manually added for time management logic without WiFi
 
 // ============================================================================
 // CONFIGURATION - Modify these values for your setup
@@ -323,14 +325,12 @@ void printRom(const uint8_t *rom) {
 
 // Get current timestamp in ISO format
 void getTimestamp(char *buffer, size_t bufferSize) {
-#if USE_BUILTIN_TIME
-  if (ntpSynced) {
-    time_t now = time(nullptr) + TIMEZONE_OFFSET;
-    struct tm *timeinfo = gmtime(&now);
-    strftime(buffer, bufferSize, "%Y-%m-%dT%H:%M:%SZ", timeinfo);
+  if (timeStatus() != timeNotSet) {
+    snprintf(buffer, bufferSize, "%04d-%02d-%02dT%02d:%02d:%02dZ", year(),
+             month(), day(), hour(), minute(), second());
     return;
   }
-#endif
+
   // Fallback to uptime-based timestamp
   unsigned long uptime = (millis() - bootTime) / 1000;
   unsigned long hours = uptime / 3600;
@@ -341,14 +341,10 @@ void getTimestamp(char *buffer, size_t bufferSize) {
 
 // Get current date string for log file rotation
 void getCurrentDate(char *buffer) {
-#if USE_BUILTIN_TIME
-  if (ntpSynced) {
-    time_t now = time(nullptr) + TIMEZONE_OFFSET;
-    struct tm *timeinfo = gmtime(&now);
-    strftime(buffer, 11, "%Y-%m-%d", timeinfo);
+  if (timeStatus() != timeNotSet) {
+    snprintf(buffer, 11, "%04d-%02d-%02d", year(), month(), day());
     return;
   }
-#endif
   strcpy(buffer, "no-date");
 }
 
@@ -912,6 +908,7 @@ void printHelp() {
   Serial.println(F("  P - Pause/Resume logging"));
   Serial.println(F("  S - Show status"));
   Serial.println(F("  T - Tail current log file"));
+  Serial.println(F("  C<unix_timestamp> - Sync Clock"));
   Serial.println(F("  H - Show this help"));
   Serial.println(F("========================\n"));
 }
@@ -1092,11 +1089,10 @@ void showStatus() {
   Serial.print(F("SD Card: "));
   Serial.println(sdAvailable ? "OK" : "NOT AVAILABLE");
 
-  Serial.print(F("WiFi: "));
-  Serial.println(wifiConnected ? "CONNECTED" : "DISCONNECTED");
+  Serial.println(F("WiFi: DISABLED (Serial Mode)"));
 
-  Serial.print(F("NTP Synced: "));
-  Serial.println(ntpSynced ? "YES" : "NO");
+  Serial.print(F("Time Synced: "));
+  Serial.println((timeStatus() != timeNotSet) ? "YES" : "NO");
 
   Serial.print(F("Logging: "));
   Serial.println(loggingPaused ? "PAUSED" : "ACTIVE");
@@ -1159,6 +1155,28 @@ void processSerialCommands() {
     case 'l':
       listFiles();
       break;
+
+    case 'C':
+    case 'c': {
+      // Expect format: C<timestamp>
+      // Use a small buffer to read the rest of the line associated with the
+      // number
+      int timeout = 100;
+      String timeStr = Serial.readStringUntil('\n');
+      timeStr.trim(); // Remove whitespace/newlines
+      if (timeStr.length() > 0) {
+        long receivedTime = timeStr.toInt();
+        if (receivedTime > 1000000000) { // Valid roughly post-2001
+          setTime(receivedTime);
+          Serial.print(F("Time synced to: "));
+          Serial.println(receivedTime);
+          // Force log file rotation check immediately
+          memset(currentLogDate, 0, sizeof(currentLogDate));
+        } else {
+          Serial.println(F("Invalid timestamp received"));
+        }
+      }
+    } break;
 
     case 'P':
     case 'p':

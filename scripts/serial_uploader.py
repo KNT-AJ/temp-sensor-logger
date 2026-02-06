@@ -43,6 +43,16 @@ def main():
     # Clear buffer
     ser.reset_input_buffer()
 
+    # Sync Time
+    try:
+        current_time = int(time.time())
+        print(f"🕒 Syncing time to {current_time}...")
+        # Send 'C' command followed by timestamp and newline
+        ser.write(f"C{current_time}\n".encode('utf-8'))
+        time.sleep(0.5) # Give it a moment to process
+    except Exception as e:
+        print(f"⚠️ Failed to sync time: {e}")
+
     while True:
         try:
             if ser.in_waiting > 0:
