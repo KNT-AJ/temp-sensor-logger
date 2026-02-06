@@ -1427,6 +1427,26 @@ void setup() {
   // Initialize level sensor pin
   pinMode(LEVEL_SENSOR_PIN, INPUT);
 
+  // I2C bus scan — diagnose what's connected
+  Serial.println("Scanning I2C bus...");
+  Wire.begin();
+  uint8_t i2cCount = 0;
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      Serial.print("  I2C device found at 0x");
+      if (addr < 16) Serial.print("0");
+      Serial.println(addr, HEX);
+      i2cCount++;
+    }
+  }
+  if (i2cCount == 0) {
+    Serial.println("  No I2C devices found! Check SDA/SCL wiring.");
+  } else {
+    Serial.print("  Total I2C devices: ");
+    Serial.println(i2cCount);
+  }
+
   // Initialize BME680
   Serial.println("Initializing BME680...");
   if (bme.begin(0x77)) {
