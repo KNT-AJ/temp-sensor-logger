@@ -263,7 +263,8 @@ void logToSD(const char *timestamp, SensorReading *readings, uint8_t count,
 void readAllSensors(SensorReading *readings, uint8_t *readingCount,
                     uint8_t *okCount, uint8_t *errorCount);
 void queueUpload(const char *timestamp, SensorReading *readings, uint8_t count,
-                 bool levelState);
+                 bool levelState, bool bmeFound, float envTemp, float envHum,
+                 float envPres, float envGas);
 void buildJsonPayload(UploadBatch *batch, char *buffer, size_t bufferSize);
 bool uploadBatch(UploadBatch *batch);
 
