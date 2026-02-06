@@ -101,9 +101,20 @@ const validatePayload = (body) => {
         errors.push(`readings[${index}].temp_c must be a number when status is 'ok'`);
       }
     });
-  }
+  });
+}
 
-  return errors;
+// Validate environment_sensor (optional)
+if (body.environment_sensor) {
+  const env = body.environment_sensor;
+  if (typeof env.sensor_name !== 'string') errors.push('environment_sensor.sensor_name must be a string');
+  if (env.temp_c && typeof env.temp_c !== 'number') errors.push('environment_sensor.temp_c must be a number');
+  if (env.humidity && typeof env.humidity !== 'number') errors.push('environment_sensor.humidity must be a number');
+  if (env.pressure_hpa && typeof env.pressure_hpa !== 'number') errors.push('environment_sensor.pressure_hpa must be a number');
+  if (env.gas_resistance_ohms && typeof env.gas_resistance_ohms !== 'number') errors.push('environment_sensor.gas_resistance_ohms must be a number');
+}
+
+return errors;
 };
 
 // Main temperature data endpoint
@@ -130,10 +141,17 @@ app.post('/api/temps', validateApiKey, async (req, res) => {
   body.readings.forEach((reading, index) => {
     if (reading.status === 'ok') {
       console.log(`  [${index + 1}] Bus ${reading.bus} (Pin ${reading.pin}) - ROM: ${reading.rom} - ${reading.temp_c}°C`);
-    } else {
       console.log(`  [${index + 1}] Bus ${reading.bus} (Pin ${reading.pin}) - ROM: ${reading.rom} - ERROR`);
     }
   });
+
+  // Log environment sensor
+  if (body.environment_sensor) {
+    const env = body.environment_sensor;
+    console.log(`  [ENV] ${env.sensor_name} (${env.type}): ${env.temp_c}°C, ${env.humidity}%, ${env.pressure_hpa}hPa, ${env.gas_resistance_ohms}Ω`);
+  }
+
+
 
   // Store in database if configured
   if (pool) {
@@ -192,6 +210,26 @@ app.post('/api/temps', validateApiKey, async (req, res) => {
           );
         }
 
+        // Insert environment sensor reading if present
+        if (body.environment_sensor) {
+          const env = body.environment_sensor;
+          await client.query(
+            `INSERT INTO environment_readings 
+             (timestamp, site_id, device_id, sensor_name, temp_c, humidity, pressure_hpa, gas_resistance_ohms)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [
+              dbTimestamp,
+              body.site_id,
+              body.device_id,
+              env.sensor_name || 'ENV01',
+              env.temp_c,
+              env.humidity,
+              env.pressure_hpa,
+              env.gas_resistance_ohms
+            ]
+          );
+        }
+
         await client.query('COMMIT');
         console.log('Data stored in PostgreSQL');
       } catch (dbError) {
@@ -242,10 +280,15 @@ app.post('/api/temps-http', validateApiKey, async (req, res) => {
   body.readings.forEach((reading, index) => {
     if (reading.status === 'ok') {
       console.log(`  [${index + 1}] Bus ${reading.bus} (Pin ${reading.pin}) - ROM: ${reading.rom} - ${reading.temp_c}°C`);
-    } else {
       console.log(`  [${index + 1}] Bus ${reading.bus} (Pin ${reading.pin}) - ROM: ${reading.rom} - ERROR`);
     }
   });
+
+  // Log environment sensor
+  if (body.environment_sensor) {
+    const env = body.environment_sensor;
+    console.log(`  [ENV] ${env.sensor_name} (${env.type}): ${env.temp_c}°C, ${env.humidity}%, ${env.pressure_hpa}hPa, ${env.gas_resistance_ohms}Ω`);
+  }
 
   // Store in database if configured
   if (pool) {
@@ -296,6 +339,26 @@ app.post('/api/temps-http', validateApiKey, async (req, res) => {
               body.level_sensor.sensor_name || 'LS01',
               body.level_sensor.pin || 5,
               body.level_sensor.state
+            ]
+          );
+        }
+
+        // Insert environment sensor reading if present
+        if (body.environment_sensor) {
+          const env = body.environment_sensor;
+          await client.query(
+            `INSERT INTO environment_readings 
+             (timestamp, site_id, device_id, sensor_name, temp_c, humidity, pressure_hpa, gas_resistance_ohms)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [
+              dbTimestamp,
+              body.site_id,
+              body.device_id,
+              env.sensor_name || 'ENV01',
+              env.temp_c,
+              env.humidity,
+              env.pressure_hpa,
+              env.gas_resistance_ohms
             ]
           );
         }

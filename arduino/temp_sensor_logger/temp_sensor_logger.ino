@@ -17,6 +17,8 @@
  *   - WiFi (board-specific)
  *   - ArduinoJson
  *   - TimeLib (for manual time management)
+ *   - Adafruit_Sensor
+ *   - Adafruit_BME680
  */
 
 #include <TimeLib.h> // Manually added for time management logic without WiFi
@@ -193,11 +195,14 @@ int consecutiveFailures = 0;
 #endif
 
 // Common includes
+#include "Adafruit_BME680.h"
+#include <Adafruit_Sensor.h>
 #include <ArduinoJson.h>
 #include <DallasTemperature.h>
 #include <OneWire.h>
 #include <SD.h>
 #include <SPI.h>
+#include <Wire.h>
 
 // ============================================================================
 // FORWARD DECLARATIONS (required for Arduino IDE)
@@ -240,13 +245,21 @@ struct UploadBatch {
   uint8_t retryCount;
   bool valid;
   bool levelSensorState; // true = liquid detected
+
+  // Environment Sensor (BME680)
+  bool bmeFound;
+  float envTempC;
+  float envHumidity;
+  float envPressure;
+  float envGasResistance;
 };
 
 // ============================================================================
 // FUNCTION PROTOTYPES (required for Arduino IDE)
 // ============================================================================
 void logToSD(const char *timestamp, SensorReading *readings, uint8_t count,
-             bool levelState);
+             bool levelState, bool bmeFound, float envTemp, float envHum,
+             float envPres, float envGas);
 void readAllSensors(SensorReading *readings, uint8_t *readingCount,
                     uint8_t *okCount, uint8_t *errorCount);
 void queueUpload(const char *timestamp, SensorReading *readings, uint8_t count,
@@ -274,7 +287,12 @@ OneWire oneWireBusB(BUS_B_PIN);
 
 // DallasTemperature instances
 DallasTemperature sensorsBusA(&oneWireBusA);
+DallasTemperature sensorsBusA(&oneWireBusA);
 DallasTemperature sensorsBusB(&oneWireBusB);
+
+// BME680 Environment Sensor
+Adafruit_BME680 bme; // I2C
+bool bmeFound = false;
 
 // Sensor registry
 SensorInfo sensorRegistry[MAX_SENSORS];
@@ -482,7 +500,7 @@ void updateLogFilePath() {
       File logFile = SD.open(currentLogPath, FILE_WRITE);
       if (logFile) {
         logFile.println("timestamp,device_id,sensor_name,bus,pin,rom,raw_temp_"
-                        "c,cal_temp_c,status");
+                        "c,cal_temp_c,status,humidity,pressure_hpa,gas_ohms");
         logFile.close();
         Serial.print("Created new log file: ");
         Serial.println(currentLogPath);
@@ -492,7 +510,8 @@ void updateLogFilePath() {
 }
 
 void logToSD(const char *timestamp, SensorReading *readings, uint8_t count,
-             bool levelState) {
+             bool levelState, bool bmeFound, float envTemp, float envHum,
+             float envPres, float envGas) {
   if (!sdAvailable) {
     Serial.println("SD card not available - skipping local log");
     return;
@@ -538,9 +557,10 @@ void logToSD(const char *timestamp, SensorReading *readings, uint8_t count,
           logFile.print(readings[i].rawTempC, 2);
           logFile.print(",");
           logFile.print(readings[i].tempC, 2);
-          logFile.println(",ok");
+          logFile.print(readings[i].tempC, 2);
+          logFile.println(",ok,,,");
         } else {
-          logFile.println("null,null,error");
+          logFile.println("null,null,error,,,");
         }
         break;
       }
@@ -556,7 +576,24 @@ void logToSD(const char *timestamp, SensorReading *readings, uint8_t count,
   logFile.print(",L,");
   logFile.print(LEVEL_SENSOR_PIN);
   logFile.print(",N/A,N/A,N/A,");
-  logFile.println(levelState ? "LIQUID" : "NONE");
+  logFile.print(levelState ? "LIQUID" : "NONE");
+  logFile.println(",,,");
+
+  if (bmeFound) {
+    logFile.print(timestamp);
+    logFile.print(",");
+    logFile.print(DEVICE_ID);
+    logFile.print(",ENV01,I2C,N/A,N/A,"); // sensor_name=ENV01
+    logFile.print(envTemp, 2);            // reuse raw temp slot for temp
+    logFile.print(",");
+    logFile.print(envTemp, 2); // reuse cal temp slot
+    logFile.print(",ok,");
+    logFile.print(envHum, 2);
+    logFile.print(",");
+    logFile.print(envPres, 2);
+    logFile.print(",");
+    logFile.println(envGas, 2);
+  }
 
   logFile.flush();
   logFile.close();
@@ -729,7 +766,8 @@ void readAllSensors(SensorReading *readings, uint8_t *readingCount,
 
 // Add batch to upload queue
 void queueUpload(const char *timestamp, SensorReading *readings, uint8_t count,
-                 bool levelState) {
+                 bool levelState, bool bmeFound, float envTemp, float envHum,
+                 float envPres, float envGas) {
   if (queueCount >= UPLOAD_QUEUE_SIZE) {
     // Queue full - drop oldest entry
     Serial.println("Upload queue full - dropping oldest batch");
@@ -745,6 +783,12 @@ void queueUpload(const char *timestamp, SensorReading *readings, uint8_t count,
   batch->retryCount = 0;
   batch->valid = true;
   batch->levelSensorState = levelState;
+
+  batch->bmeFound = bmeFound;
+  batch->envTempC = envTemp;
+  batch->envHumidity = envHum;
+  batch->envPressure = envPres;
+  batch->envGasResistance = envGas;
 
   queueHead = (queueHead + 1) % UPLOAD_QUEUE_SIZE;
   queueCount++;
@@ -805,6 +849,18 @@ void buildJsonPayload(UploadBatch *batch, char *buffer, size_t bufferSize) {
   levelSensor["sensor_name"] = LEVEL_SENSOR_NAME;
   levelSensor["pin"] = LEVEL_SENSOR_PIN;
   levelSensor["state"] = batch->levelSensorState ? "LIQUID" : "NONE";
+
+  // Add environment sensor data
+  if (batch->bmeFound) {
+    JsonObject envSensor = doc.createNestedObject("environment_sensor");
+    envSensor["sensor_name"] = "ENV01";
+    envSensor["type"] = "BME680";
+    envSensor["temp_c"] = serialized(String(batch->envTempC, 2));
+    envSensor["humidity"] = serialized(String(batch->envHumidity, 2));
+    envSensor["pressure_hpa"] = serialized(String(batch->envPressure, 2));
+    envSensor["gas_resistance_ohms"] =
+        serialized(String(batch->envGasResistance, 0));
+  }
 
   serializeJson(doc, buffer, bufferSize);
 }
@@ -1100,6 +1156,9 @@ void showStatus() {
   Serial.print(F("Logging: "));
   Serial.println(loggingPaused ? "PAUSED" : "ACTIVE");
 
+  Serial.print(F("BME680 Sensor: "));
+  Serial.println(bmeFound ? "OK" : "NOT FOUND");
+
   Serial.print(F("Sensors found: "));
   Serial.println(sensorCount);
 
@@ -1221,12 +1280,50 @@ void sampleAndLog() {
   static SensorReading readings[MAX_SENSORS];
   uint8_t readingCount, okCount, errorCount;
 
+  // BME680 Readings
+  float envTemp = 0, envHum = 0, envPres = 0, envGas = 0;
+  bool bmeSuccess = false;
+
+  if (bmeFound) {
+    // Tell BME680 to begin measurement.
+    unsigned long endTime = bme.beginReading();
+    if (endTime == 0) {
+      Serial.println(F("Failed to begin reading :("));
+    } else {
+      // Loop or delay? since we are in sampleAndLog which is called in loop,
+      // simple delay is okay as we are already "busy" sampling.
+      // But readAllSensors has a 750ms delay already.
+      // We can start BME reading BEFORE DS18B20 reading!
+    }
+  }
+
   // Get current timestamp
   char timestamp[25];
   getTimestamp(timestamp, sizeof(timestamp));
 
-  // Read all temperature sensors
+  // Start BME reading if available (async start)
+  unsigned long bmeWaitTime = 0;
+  if (bmeFound) {
+    bmeWaitTime = bme.beginReading();
+  }
+
+  // Read all temperature sensors (contains 750ms delay)
   readAllSensors(readings, &readingCount, &okCount, &errorCount);
+
+  // Check BME reading
+  if (bmeFound && bmeWaitTime > 0) {
+    // If the 750ms delay wasn't enough (unlikely for BME), wait more
+    // But usually BME takes ~100-200ms depending on oversampling
+    if (!bme.endReading()) {
+      Serial.println(F("BME680 reading failed"));
+    } else {
+      envTemp = bme.temperature;
+      envHum = bme.humidity;
+      envPres = bme.pressure / 100.0;
+      envGas = bme.gas_resistance;
+      bmeSuccess = true;
+    }
+  }
 
   // Read level sensor
   bool levelState = (digitalRead(LEVEL_SENSOR_PIN) == HIGH);
@@ -1268,16 +1365,31 @@ void sampleAndLog() {
   }
 
   // Print level sensor
-  Serial.print("  ");
   Serial.print(LEVEL_SENSOR_NAME);
   Serial.print(": ");
   Serial.println(levelState ? "LIQUID DETECTED" : "NO LIQUID");
 
+  if (bmeSuccess) {
+    Serial.print("  ENV01 (BME680): ");
+    Serial.print(envTemp);
+    Serial.print("C, ");
+    Serial.print(envHum);
+    Serial.print("%, ");
+    Serial.print(envPres);
+    Serial.print("hPa, ");
+    Serial.print(envGas / 1000.0);
+    Serial.println(" KOhms");
+  } else if (bmeFound) {
+    Serial.println("  ENV01 (BME680): READ ERROR");
+  }
+
   // Log to SD card (primary storage)
-  logToSD(timestamp, readings, readingCount, levelState);
+  logToSD(timestamp, readings, readingCount, levelState, bmeSuccess, envTemp,
+          envHum, envPres, envGas);
 
   // Queue for cloud upload
-  queueUpload(timestamp, readings, readingCount, levelState);
+  queueUpload(timestamp, readings, readingCount, levelState, bmeSuccess,
+              envTemp, envHum, envPres, envGas);
 }
 
 // ============================================================================
@@ -1315,6 +1427,23 @@ void setup() {
 
   // Initialize level sensor pin
   pinMode(LEVEL_SENSOR_PIN, INPUT);
+
+  // Initialize BME680
+  Serial.println("Initializing BME680...");
+  if (!bme.begin()) {
+    Serial.println("Could not find a valid BME680 sensor, check wiring!");
+    bmeFound = false;
+  } else {
+    Serial.println("BME680 Found!");
+    bmeFound = true;
+
+    // Set up oversampling and filter initialization
+    bme.setTemperatureOversampling(BME680_OS_8X);
+    bme.setHumidityOversampling(BME680_OS_2X);
+    bme.setPressureOversampling(BME680_OS_4X);
+    bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
+    bme.setGasHeater(320, 150); // 320*C for 150 ms
+  }
 
   // Initialize SD card
   setupSD();
