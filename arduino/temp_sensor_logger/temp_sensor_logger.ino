@@ -355,56 +355,72 @@ void getCurrentDate(char *buffer) {
 // WIFI FUNCTIONS
 // ============================================================================
 
-void setupWiFi() {
-  Serial.print("Connecting to WiFi: ");
-  Serial.println(WIFI_SSID);
+// Check if WiFi module is working
+if (WiFi.status() == WL_NO_MODULE) {
+  Serial.println("Communication with WiFi module failed!");
+  return;
+}
 
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
+// STATIC IP CONFIGURATION (To bypass DHCP failure)
+IPAddress local_IP(10, 0, 4, 60);
+IPAddress gateway(10, 0, 4, 1);
+IPAddress subnet(255, 255, 255, 0);
+IPAddress primaryDNS(8, 8, 8, 8);
+IPAddress secondaryDNS(8, 8, 4, 4);
 
-  unsigned long startTime = millis();
-  while (WiFi.status() != WL_CONNECTED &&
-         (millis() - startTime) < WIFI_TIMEOUT_MS) {
-    delay(250);
-    Serial.print(".");
-  }
+Serial.println("Configuring Static IP...");
+if (!WiFi.config(local_IP, primaryDNS, gateway, subnet)) {
+  Serial.println("Static IP Configuration Failed!");
+}
 
-  if (WiFi.status() == WL_CONNECTED) {
-    wifiConnected = true;
-    Serial.println();
-    Serial.print("WiFi connected! IP: ");
-    Serial.println(WiFi.localIP());
+Serial.print("Connecting to WiFi: ");
+Serial.println(WIFI_SSID);
 
-    // Initialize NTP if supported
+WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+unsigned long startTime = millis();
+while (WiFi.status() != WL_CONNECTED &&
+       (millis() - startTime) < WIFI_TIMEOUT_MS) {
+  delay(250);
+  Serial.print(".");
+}
+
+if (WiFi.status() == WL_CONNECTED) {
+  wifiConnected = true;
+  Serial.println();
+  Serial.print("WiFi connected! IP: ");
+  Serial.println(WiFi.localIP());
+
+  // Initialize NTP if supported
 #if USE_BUILTIN_TIME
-    Serial.println("Syncing time via NTP...");
-    configTime(TIMEZONE_OFFSET, 0, "pool.ntp.org", "time.nist.gov");
+  Serial.println("Syncing time via NTP...");
+  configTime(TIMEZONE_OFFSET, 0, "pool.ntp.org", "time.nist.gov");
 
-    // Wait for time sync (max 5 seconds)
-    unsigned long ntpStart = millis();
-    while (time(nullptr) < 1000000000 && (millis() - ntpStart) < 5000) {
-      delay(100);
-    }
-
-    if (time(nullptr) > 1000000000) {
-      ntpSynced = true;
-      Serial.println("NTP synced successfully");
-
-      char timeStr[25];
-      getTimestamp(timeStr, sizeof(timeStr));
-      Serial.print("Current time: ");
-      Serial.println(timeStr);
-    } else {
-      Serial.println("NTP sync failed, using uptime timestamps");
-    }
-#endif
-    Serial.print("IP Address: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    wifiConnected = false;
-    Serial.println();
-    Serial.println(
-        "WiFi connection failed - continuing with local logging only");
+  // Wait for time sync (max 5 seconds)
+  unsigned long ntpStart = millis();
+  while (time(nullptr) < 1000000000 && (millis() - ntpStart) < 5000) {
+    delay(100);
   }
+
+  if (time(nullptr) > 1000000000) {
+    ntpSynced = true;
+    Serial.println("NTP synced successfully");
+
+    char timeStr[25];
+    getTimestamp(timeStr, sizeof(timeStr));
+    Serial.print("Current time: ");
+    Serial.println(timeStr);
+  } else {
+    Serial.println("NTP sync failed, using uptime timestamps");
+  }
+#endif
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+} else {
+  wifiConnected = false;
+  Serial.println();
+  Serial.println("WiFi connection failed - continuing with local logging only");
+}
 }
 
 void checkWiFiConnection() {
