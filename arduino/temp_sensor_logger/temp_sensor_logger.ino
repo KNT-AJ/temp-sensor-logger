@@ -832,7 +832,7 @@ bool uploadBatch(UploadBatch *batch) {
 
 // Process upload queue
 void processUploadQueue() {
-  if (queueCount == 0 || !wifiConnected) {
+  if (queueCount == 0) {
     return;
   }
 
