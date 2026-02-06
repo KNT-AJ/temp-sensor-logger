@@ -34,14 +34,13 @@ def main():
     try:
         ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
         ser.dtr = True # Force DTR to reset/wake Uno R4
-        time.sleep(1) # Wait for reset
+        time.sleep(3) # Wait for Arduino to boot and print init messages
         print("✅ Serial connected. Listening for data...")
     except Exception as e:
         print(f"❌ Could not open serial port {SERIAL_PORT}: {e}")
         sys.exit(1)
 
-    # Clear buffer
-    ser.reset_input_buffer()
+    # Don't clear buffer - we want to see startup messages (BME680 init, etc.)
 
     # Sync Time
     try:

@@ -1429,13 +1429,18 @@ void setup() {
 
   // Initialize BME680
   Serial.println("Initializing BME680...");
-  if (!bme.begin()) {
-    Serial.println("Could not find a valid BME680 sensor, check wiring!");
-    bmeFound = false;
-  } else {
-    Serial.println("BME680 Found!");
+  if (bme.begin(0x77)) {
+    Serial.println("BME680 Found at 0x77!");
     bmeFound = true;
+  } else if (bme.begin(0x76)) {
+    Serial.println("BME680 Found at 0x76!");
+    bmeFound = true;
+  } else {
+    Serial.println("Could not find BME680 at 0x77 or 0x76, check wiring!");
+    bmeFound = false;
+  }
 
+  if (bmeFound) {
     // Set up oversampling and filter initialization
     bme.setTemperatureOversampling(BME680_OS_8X);
     bme.setHumidityOversampling(BME680_OS_2X);
