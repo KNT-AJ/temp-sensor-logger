@@ -90,8 +90,9 @@ rqXRfboQnoZsG4q5WTP468SQvvG5
 // Upload queue configuration (ring buffer)
 #define UPLOAD_QUEUE_SIZE 10
 
-// Timezone offset in seconds (0 = UTC, -28800 = PST, etc.)
-#define TIMEZONE_OFFSET 0
+// Timezone offset in seconds (0 = UTC, -21600 = CST, -18000 = EST, -28800 =
+// PST)
+#define TIMEZONE_OFFSET -21600
 
 // ============================================================================
 // CALIBRATION VALUES (from stirred two-point calibration)
@@ -326,7 +327,7 @@ void printRom(const uint8_t *rom) {
 // Get current timestamp in ISO format
 void getTimestamp(char *buffer, size_t bufferSize) {
   if (timeStatus() != timeNotSet) {
-    snprintf(buffer, bufferSize, "%04d-%02d-%02dT%02d:%02d:%02dZ", year(),
+    snprintf(buffer, bufferSize, "%04d-%02d-%02dT%02d:%02d:%02d", year(),
              month(), day(), hour(), minute(), second());
     return;
   }
@@ -1169,9 +1170,9 @@ void processSerialCommands() {
       if (timeStr.length() > 0) {
         long receivedTime = timeStr.toInt();
         if (receivedTime > 1000000000) { // Valid roughly post-2001
-          setTime(receivedTime);
+          setTime(receivedTime + TIMEZONE_OFFSET);
           Serial.print(F("Time synced to: "));
-          Serial.println(receivedTime);
+          Serial.println(receivedTime + TIMEZONE_OFFSET);
           // Force log file rotation check immediately
           memset(currentLogDate, 0, sizeof(currentLogDate));
         } else {
