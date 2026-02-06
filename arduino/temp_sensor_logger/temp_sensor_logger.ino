@@ -397,6 +397,8 @@ void setupWiFi() {
       Serial.println("NTP sync failed, using uptime timestamps");
     }
 #endif
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
   } else {
     wifiConnected = false;
     Serial.println();
@@ -410,6 +412,8 @@ void checkWiFiConnection() {
 
   if (currentlyConnected && !wifiConnected) {
     Serial.println("WiFi reconnected!");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
     wifiConnected = true;
   } else if (!currentlyConnected && wifiConnected) {
     Serial.println("WiFi disconnected - will retry");
