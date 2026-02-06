@@ -257,6 +257,7 @@ void printHelp();
 void listFiles();
 void listDirectory(File dir, int indent);
 void dumpFile(const char *path);
+void tailCurrentLog();
 void dumpAllLogs();
 void showStatus();
 
@@ -910,6 +911,7 @@ void printHelp() {
   Serial.println(F("  L - List files on SD card"));
   Serial.println(F("  P - Pause/Resume logging"));
   Serial.println(F("  S - Show status"));
+  Serial.println(F("  T - Tail current log file"));
   Serial.println(F("  H - Show this help"));
   Serial.println(F("========================\n"));
 }
@@ -979,6 +981,57 @@ void dumpFile(const char *path) {
 
   file.close();
   Serial.println(F("--- End of file ---"));
+}
+
+void tailCurrentLog() {
+  if (!sdAvailable) {
+    Serial.println(F("ERROR: SD card not available"));
+    return;
+  }
+
+  if (strlen(currentLogPath) == 0) {
+    Serial.println(F("ERROR: No active log file"));
+    return;
+  }
+
+  if (!SD.exists(currentLogPath)) {
+    Serial.print(F("ERROR: Log file not found: "));
+    Serial.println(currentLogPath);
+    return;
+  }
+
+  File file = SD.open(currentLogPath);
+  if (!file) {
+    Serial.print(F("ERROR: Cannot open "));
+    Serial.println(currentLogPath);
+    return;
+  }
+
+  unsigned long fileSize = file.size();
+  unsigned long tailBytes = 4096; // Last 4KB
+
+  Serial.print(F("--- Tailing last 4KB of: "));
+  Serial.print(currentLogPath);
+  Serial.print(F(" ("));
+  Serial.print(fileSize);
+  Serial.println(F(" bytes) ---"));
+
+  if (fileSize > tailBytes) {
+    if (file.seek(fileSize - tailBytes)) {
+      // Read until next newline to align to row
+      while (file.available()) {
+        if (file.read() == '\n')
+          break;
+      }
+    }
+  }
+
+  while (file.available()) {
+    Serial.write(file.read());
+  }
+
+  file.close();
+  Serial.println(F("\n--- End of tail ---"));
 }
 
 void dumpAllLogs() {
@@ -1117,6 +1170,11 @@ void processSerialCommands() {
     case 'S':
     case 's':
       showStatus();
+      break;
+
+    case 'T':
+    case 't':
+      tailCurrentLog();
       break;
 
     case 'H':
