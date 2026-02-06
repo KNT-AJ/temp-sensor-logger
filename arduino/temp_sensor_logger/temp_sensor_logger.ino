@@ -28,17 +28,15 @@
 #define WIFI_PASS "ki11erWing$"
 
 // Heroku endpoint configuration
-#define HEROKU_URL                                                             \
-  "https://temp-logger-1770077582-8b1b2ec536f6.herokuapp.com/api/temps"
+// Heroku endpoint configuration
+// URL is set to local Pi proxy to avoid Arduino SSL issues
+// Pi forwards to:
+// https://temp-logger-1770077582-8b1b2ec536f6.herokuapp.com/api/temps
+#define HEROKU_URL "http://10.0.4.58:8080/api/temps"
 #define API_KEY "36e6e1669f7302366f067627383705a0"
 
-// HTTP fallback URL (used when HTTPS fails)
-// Point to local proxy on Raspberry Pi that forwards to Heroku
-// Update PI_IP_ADDRESS to your Pi's local IP (e.g., 192.168.1.100)
-#define HEROKU_HTTP_URL "http://10.0.4.58:8080/api/temps"
-
-// Enable HTTP fallback after HTTPS failures
-#define USE_HTTP_FALLBACK 1
+// HTTP fallback is no longer needed since main URL is HTTP
+#define USE_HTTP_FALLBACK 0
 #define HTTPS_FAIL_COUNT_BEFORE_FALLBACK 3
 
 // Amazon Root CA 1 certificate (for Heroku HTTPS)
