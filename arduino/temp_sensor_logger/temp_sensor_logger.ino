@@ -967,6 +967,7 @@ void printHelp() {
   Serial.println(F("  S - Show status"));
   Serial.println(F("  T - Tail current log file"));
   Serial.println(F("  C<unix_timestamp> - Sync Clock"));
+  Serial.println(F("  I - I2C bus scan"));
   Serial.println(F("  H - Show this help"));
   Serial.println(F("========================\n"));
 }
@@ -1255,6 +1256,28 @@ void processSerialCommands() {
     case 't':
       tailCurrentLog();
       break;
+
+    case 'I':
+    case 'i': {
+      Serial.println(F("\n=== I2C Bus Scan ==="));
+      uint8_t count = 0;
+      for (uint8_t addr = 1; addr < 127; addr++) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission() == 0) {
+          Serial.print(F("  Device found at 0x"));
+          if (addr < 16) Serial.print(F("0"));
+          Serial.println(addr, HEX);
+          count++;
+        }
+      }
+      if (count == 0) {
+        Serial.println(F("  No I2C devices found!"));
+      } else {
+        Serial.print(F("  Total devices: "));
+        Serial.println(count);
+      }
+      Serial.println(F("===================\n"));
+    } break;
 
     case 'H':
     case 'h':
