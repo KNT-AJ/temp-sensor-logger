@@ -7,7 +7,7 @@ import os
 
 # Configuration
 SERIAL_PORT = '/dev/ttyACM0'
-BAUD_RATE = 9600
+BAUD_RATE = 115200
 HEROKU_URL = "https://temp-logger-1770077582-8b1b2ec536f6.herokuapp.com/api/temps"
 API_KEY = "36e6e1669f7302366f067627383705a0"
 
@@ -33,6 +33,8 @@ def main():
     
     try:
         ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
+        ser.dtr = True # Force DTR to reset/wake Uno R4
+        time.sleep(1) # Wait for reset
         print("✅ Serial connected. Listening for data...")
     except Exception as e:
         print(f"❌ Could not open serial port {SERIAL_PORT}: {e}")
