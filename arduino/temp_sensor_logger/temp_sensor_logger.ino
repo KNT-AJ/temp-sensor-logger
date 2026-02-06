@@ -139,6 +139,13 @@ float calibrate(int sensorIndex, float rawTemp) {
 }
 
 // ============================================================================
+// WATCHDOG / SELF-HEALING CONFIGURATION
+// ============================================================================
+const int MAX_CONSECUTIVE_FAILURES_BEFORE_RESET =
+    20; // Reboot after ~5 mins (20 * 15s) of continuous failure
+int consecutiveFailures = 0;
+
+// ============================================================================
 // BOARD-SPECIFIC INCLUDES AND DEFINITIONS
 // ============================================================================
 
@@ -920,7 +927,8 @@ bool uploadBatch(UploadBatch *batch) {
 
       if (statusLine.indexOf("200") > 0 || statusLine.indexOf("201") > 0) {
         Serial.println("Upload successful!");
-        httpsFailCount = 0; // Reset fail count on success
+        httpsFailCount = 0;      // Reset fail count on success
+        consecutiveFailures = 0; // Reset watchdog
         return true;
       } else {
         Serial.print("Upload failed: ");
@@ -965,6 +973,7 @@ bool uploadBatch(UploadBatch *batch) {
 
       if (statusLine.indexOf("200") > 0 || statusLine.indexOf("201") > 0) {
         Serial.println("Upload successful!");
+        consecutiveFailures = 0; // Reset watchdog
         return true;
       } else {
         Serial.print("Upload failed: ");
@@ -983,6 +992,25 @@ bool uploadBatch(UploadBatch *batch) {
     Serial.print("  WiFi RSSI: ");
     Serial.print(WiFi.RSSI());
     Serial.println(" dBm");
+
+    // INCREMENT FAILURE COUNTER
+    consecutiveFailures++;
+    Serial.print("  Consecutive failures: ");
+    Serial.print(consecutiveFailures);
+    Serial.print("/");
+    Serial.println(MAX_CONSECUTIVE_FAILURES_BEFORE_RESET);
+
+    // Check for self-healing reset
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES_BEFORE_RESET) {
+      Serial.println(
+          "\n!!! CRITICAL: Too many failures. Initiating System Reset !!!");
+      delay(100);
+      NVIC_SystemReset(); // Hard Reset for ARM Cortex-M4
+    }
+  } else {
+    // If we connected but upload failed (e.g. 500 error), we still count it as
+    // a failure logic is handled inside "if (isHttps)" and "else" blocks above,
+    // but if we are here, 'connected' is false, so we handle connection errors.
   }
 
   return false;
