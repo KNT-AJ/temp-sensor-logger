@@ -958,7 +958,7 @@ bool uploadBatch(UploadBatch *batch) {
   } else {
     // HTTP connection
     WiFiClient client;
-    client.setTimeout(10000);
+    client.setTimeout(20000); // 20s connection timeout
 
     if (client.connect(host.c_str(), port)) {
       connected = true;
@@ -980,7 +980,7 @@ bool uploadBatch(UploadBatch *batch) {
       // Read response
       unsigned long timeout = millis();
       while (client.available() == 0) {
-        if (millis() - timeout > 10000) {
+        if (millis() - timeout > 30000) { // Increased to 30s
           Serial.println("HTTP upload timeout waiting for data");
           client.stop();
           return false;
