@@ -141,6 +141,7 @@ app.post('/api/temps', validateApiKey, async (req, res) => {
   body.readings.forEach((reading, index) => {
     if (reading.status === 'ok') {
       console.log(`  [${index + 1}] Bus ${reading.bus} (Pin ${reading.pin}) - ROM: ${reading.rom} - ${reading.temp_c}°C`);
+    } else {
       console.log(`  [${index + 1}] Bus ${reading.bus} (Pin ${reading.pin}) - ROM: ${reading.rom} - ERROR`);
     }
   });
@@ -280,6 +281,7 @@ app.post('/api/temps-http', validateApiKey, async (req, res) => {
   body.readings.forEach((reading, index) => {
     if (reading.status === 'ok') {
       console.log(`  [${index + 1}] Bus ${reading.bus} (Pin ${reading.pin}) - ROM: ${reading.rom} - ${reading.temp_c}°C`);
+    } else {
       console.log(`  [${index + 1}] Bus ${reading.bus} (Pin ${reading.pin}) - ROM: ${reading.rom} - ERROR`);
     }
   });

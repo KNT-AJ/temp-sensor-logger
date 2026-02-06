@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS temperature_readings (
     bus CHAR(1) NOT NULL CHECK (bus IN ('A', 'B')),
     pin INTEGER NOT NULL,
     rom VARCHAR(16) NOT NULL,
+    raw_temp_c DECIMAL(5,2),
     temp_c DECIMAL(5,2),
     status VARCHAR(10) NOT NULL CHECK (status IN ('ok', 'error')),
     created_at TIMESTAMPTZ DEFAULT NOW()

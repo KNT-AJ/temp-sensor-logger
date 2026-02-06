@@ -287,7 +287,6 @@ OneWire oneWireBusB(BUS_B_PIN);
 
 // DallasTemperature instances
 DallasTemperature sensorsBusA(&oneWireBusA);
-DallasTemperature sensorsBusA(&oneWireBusA);
 DallasTemperature sensorsBusB(&oneWireBusB);
 
 // BME680 Environment Sensor
@@ -556,7 +555,6 @@ void logToSD(const char *timestamp, SensorReading *readings, uint8_t count,
         if (readings[i].ok) {
           logFile.print(readings[i].rawTempC, 2);
           logFile.print(",");
-          logFile.print(readings[i].tempC, 2);
           logFile.print(readings[i].tempC, 2);
           logFile.println(",ok,,,");
         } else {
