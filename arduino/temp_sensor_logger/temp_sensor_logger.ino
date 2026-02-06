@@ -1249,7 +1249,7 @@ void loop() {
   processSerialCommands();
 
   // Check WiFi connection
-  checkWiFiConnection();
+  // checkWiFiConnection();
 
   // Non-blocking sample timing (skip if paused)
   if (!loggingPaused && (currentTime - lastSampleTime >= SAMPLE_INTERVAL_MS)) {
