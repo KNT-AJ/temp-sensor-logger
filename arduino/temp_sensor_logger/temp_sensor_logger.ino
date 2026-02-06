@@ -836,135 +836,146 @@ bool uploadBatch(UploadBatch *batch) {
 
 #elif defined(ARDUINO_SAMD_MKRWIFI1010) || defined(ARDUINO_UNOR4_WIFI)
 
-#if USE_HTTP_FALLBACK
-  // Check if we should use HTTP fallback
-  if (useHttpFallback) {
-    Serial.println("Using HTTP fallback mode");
+  String url = HEROKU_URL;
+  bool isHttps = url.startsWith("https://");
 
-    // Use regular WiFiClient for HTTP
-    WiFiClient httpClient;
+  String host;
+  int port;
+  String path;
 
-    String url = HEROKU_HTTP_URL;
+  // URL Parsing
+  if (isHttps) {
+    url.remove(0, 8); // Remove "https://"
+    port = 443;
+  } else {
     url.remove(0, 7); // Remove "http://"
-    int pathStart = url.indexOf('/');
-    String host = url.substring(0, pathStart);
-    String path = url.substring(pathStart);
+    port = 80;
+  }
 
-    Serial.print("Connecting to ");
-    Serial.print(host);
-    Serial.print(" (HTTP)... (WiFi RSSI: ");
-    Serial.print(WiFi.RSSI());
-    Serial.println(" dBm)");
+  int pathStart = url.indexOf('/');
+  if (pathStart == -1) {
+    host = url;
+    path = "/";
+  } else {
+    host = url.substring(0, pathStart);
+    path = url.substring(pathStart);
+  }
 
-    if (httpClient.connect(host.c_str(), 80)) {
-      httpClient.print("POST ");
-      httpClient.print(path);
-      httpClient.println(" HTTP/1.1");
-      httpClient.print("Host: ");
-      httpClient.println(host);
-      httpClient.println("Content-Type: application/json");
-      httpClient.print("X-API-Key: ");
-      httpClient.println(API_KEY);
-      httpClient.print("Content-Length: ");
-      httpClient.println(strlen(jsonBuffer));
-      httpClient.println("Connection: close");
-      httpClient.println();
-      httpClient.println(jsonBuffer);
-      httpClient.flush();
+  // Handle custom ports (e.g. host:8080)
+  int portSep = host.indexOf(':');
+  if (portSep != -1) {
+    port = host.substring(portSep + 1).toInt();
+    host = host.substring(0, portSep);
+  }
 
+  Serial.print("Connecting to ");
+  Serial.print(host);
+  Serial.print(":");
+  Serial.print(port);
+  Serial.print(isHttps ? " (HTTPS)..." : " (HTTP)...");
+  Serial.print(" (WiFi RSSI: ");
+  Serial.print(WiFi.RSSI());
+  Serial.println(" dBm)");
+
+  unsigned long connectStart = millis();
+  bool connected = false;
+
+  if (isHttps) {
+    // HTTPS connection
+    WiFiSSLClient client;
+    client.setTimeout(20000);
+    // Explicitly set the CA cert (if supported by library version)
+    // client.setCACert(AMAZON_ROOT_CA1);
+
+    if (client.connect(host.c_str(), port)) {
+      connected = true;
+      client.print("POST ");
+      client.print(path);
+      client.println(" HTTP/1.1");
+      client.print("Host: ");
+      client.println(host);
+      client.println("Content-Type: application/json");
+      client.print("X-API-Key: ");
+      client.println(API_KEY);
+      client.print("Content-Length: ");
+      client.println(strlen(jsonBuffer));
+      client.println("Connection: close");
+      client.println();
+      client.println(jsonBuffer);
+      client.flush();
+
+      // Read response
       unsigned long timeout = millis();
-      while (httpClient.available() == 0) {
+      while (client.available() == 0) {
         if (millis() - timeout > 10000) {
-          Serial.println("HTTP upload timeout");
-          httpClient.stop();
+          Serial.println("HTTPS upload timeout waiting for data");
+          client.stop();
           return false;
         }
         delay(10);
       }
 
-      String statusLine = httpClient.readStringUntil('\n');
-      httpClient.stop();
+      String statusLine = client.readStringUntil('\n');
+      client.stop();
 
       if (statusLine.indexOf("200") > 0 || statusLine.indexOf("201") > 0) {
-        Serial.println("HTTP upload successful!");
+        Serial.println("Upload successful!");
+        httpsFailCount = 0; // Reset fail count on success
         return true;
       } else {
-        Serial.print("HTTP upload failed: ");
+        Serial.print("Upload failed: ");
         Serial.println(statusLine);
       }
-    } else {
-      Serial.println("HTTP connection failed");
-    }
-
-    return false;
-  }
-#endif
-
-  // Try HTTPS with root CA certificate
-  WiFiSSLClient client;
-  client.setTimeout(20000); // 20 second timeout for SSL handshake
-
-  // Parse host and path from URL
-  // Note: Simple parsing - assumes https://host/path format
-  String url = HEROKU_URL;
-  url.remove(0, 8); // Remove "https://"
-  int pathStart = url.indexOf('/');
-  String host = url.substring(0, pathStart);
-  String path = url.substring(pathStart);
-
-  Serial.print("Connecting to ");
-  Serial.print(host);
-  Serial.print(" (HTTPS)... (WiFi RSSI: ");
-  Serial.print(WiFi.RSSI());
-  Serial.println(" dBm)");
-
-  unsigned long connectStart = millis();
-  if (client.connect(host.c_str(), 443)) {
-    // Reset failure counter on successful connection
-    httpsFailCount = 0;
-
-    client.print("POST ");
-    client.print(path);
-    client.println(" HTTP/1.1");
-    client.print("Host: ");
-    client.println(host);
-    client.println("Content-Type: application/json");
-    client.print("X-API-Key: ");
-    client.println(API_KEY);
-    client.print("Content-Length: ");
-    client.println(strlen(jsonBuffer));
-    client.println("Connection: close");
-    client.println();
-    client.println(jsonBuffer);
-    client.flush(); // Ensure data is sent
-
-    // Wait for response (but don't read entire body)
-    unsigned long timeout = millis();
-    while (client.available() == 0) {
-      if (millis() - timeout > 10000) {
-        Serial.println("Upload timeout");
-        client.stop();
-        delay(500); // Allow WiFi stack to recover
-        return false;
-      }
-      delay(10); // Small delay to prevent tight loop
-    }
-
-    // Read just the status line to check for success
-    String statusLine = client.readStringUntil('\n');
-    client.stop(); // Close connection immediately after reading status
-    delay(250);    // Allow WiFi stack to fully close connection
-
-    if (statusLine.indexOf("200") > 0 || statusLine.indexOf("201") > 0) {
-      Serial.println("Upload successful!");
-      return true;
-    } else {
-      Serial.print("Upload failed: ");
-      Serial.println(statusLine);
     }
   } else {
+    // HTTP connection
+    WiFiClient client;
+    client.setTimeout(10000);
+
+    if (client.connect(host.c_str(), port)) {
+      connected = true;
+      client.print("POST ");
+      client.print(path);
+      client.println(" HTTP/1.1");
+      client.print("Host: ");
+      client.println(host);
+      client.println("Content-Type: application/json");
+      client.print("X-API-Key: ");
+      client.println(API_KEY);
+      client.print("Content-Length: ");
+      client.println(strlen(jsonBuffer));
+      client.println("Connection: close");
+      client.println();
+      client.println(jsonBuffer);
+      client.flush();
+
+      // Read response
+      unsigned long timeout = millis();
+      while (client.available() == 0) {
+        if (millis() - timeout > 10000) {
+          Serial.println("HTTP upload timeout waiting for data");
+          client.stop();
+          return false;
+        }
+        delay(10);
+      }
+
+      String statusLine = client.readStringUntil('\n');
+      client.stop();
+
+      if (statusLine.indexOf("200") > 0 || statusLine.indexOf("201") > 0) {
+        Serial.println("Upload successful!");
+        return true;
+      } else {
+        Serial.print("Upload failed: ");
+        Serial.println(statusLine);
+      }
+    }
+  }
+
+  if (!connected) {
     unsigned long connectTime = millis() - connectStart;
-    Serial.print("HTTPS connection failed after ");
+    Serial.print("Connection failed after ");
     Serial.print(connectTime);
     Serial.println(" ms");
     Serial.print("  WiFi status: ");
@@ -972,26 +983,6 @@ bool uploadBatch(UploadBatch *batch) {
     Serial.print("  WiFi RSSI: ");
     Serial.print(WiFi.RSSI());
     Serial.println(" dBm");
-
-#if USE_HTTP_FALLBACK
-    // Track HTTPS failures for fallback logic
-    httpsFailCount++;
-    Serial.print("  HTTPS fail count: ");
-    Serial.print(httpsFailCount);
-    Serial.print("/");
-    Serial.println(HTTPS_FAIL_COUNT_BEFORE_FALLBACK);
-
-    if (httpsFailCount >= HTTPS_FAIL_COUNT_BEFORE_FALLBACK) {
-      Serial.println("  Switching to HTTP fallback mode!");
-      Serial.println(
-          "  Note: HTTP may not work directly with Heroku (HTTPS redirect)");
-      Serial.println("  Consider setting up an HTTP proxy or using "
-                     "ngrok/Cloudflare tunnel");
-      useHttpFallback = true;
-    }
-#endif
-
-    delay(1000); // Allow WiFi stack to recover
   }
 
   return false;
