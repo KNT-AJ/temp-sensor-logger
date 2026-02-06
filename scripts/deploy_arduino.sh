@@ -4,7 +4,7 @@ set -e
 # Configuration
 SKETCH_PATH="arduino/temp_sensor_logger/temp_sensor_logger.ino"
 BOARD_FQBN="arduino:renesas_uno:unor4wifi"
-PORT="/dev/ttyACM1"
+PORT="/dev/ttyACM0"
 
 # 1. Install Arduino CLI if not present
 if ! command -v arduino-cli &> /dev/null; then

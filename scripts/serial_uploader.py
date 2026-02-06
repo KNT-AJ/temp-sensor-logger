@@ -4,12 +4,22 @@ import json
 import requests
 import sys
 import os
+import glob
 
 # Configuration
-SERIAL_PORT = '/dev/ttyACM1'
+SERIAL_PORT = '/dev/ttyACM0'
 BAUD_RATE = 115200
 HEROKU_URL = "https://temp-logger-1770077582-8b1b2ec536f6.herokuapp.com/api/temps"
 API_KEY = "36e6e1669f7302366f067627383705a0"
+
+def find_arduino_port():
+    """Auto-detect Arduino serial port (ttyACM0, ttyACM1, etc.)"""
+    candidates = sorted(glob.glob('/dev/ttyACM*'))
+    if candidates:
+        port = candidates[0]
+        print(f"🔍 Auto-detected Arduino port: {port}")
+        return port
+    return SERIAL_PORT  # fallback to default
 
 def upload_to_heroku(json_data):
     """Sends JSON data to Heroku backend"""
@@ -29,15 +39,16 @@ def upload_to_heroku(json_data):
         print(f"❌ Error uploading to Heroku: {e}")
 
 def main():
-    print(f"🔌 Connecting to {SERIAL_PORT} @ {BAUD_RATE}...")
+    port = find_arduino_port()
+    print(f"🔌 Connecting to {port} @ {BAUD_RATE}...")
     
     try:
-        ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
+        ser = serial.Serial(port, BAUD_RATE, timeout=1)
         ser.dtr = True # Force DTR to reset/wake Uno R4
         time.sleep(3) # Wait for Arduino to boot and print init messages
         print("✅ Serial connected. Listening for data...")
     except Exception as e:
-        print(f"❌ Could not open serial port {SERIAL_PORT}: {e}")
+        print(f"❌ Could not open serial port {port}: {e}")
         sys.exit(1)
 
     # Don't clear buffer - we want to see startup messages (BME680 init, etc.)
