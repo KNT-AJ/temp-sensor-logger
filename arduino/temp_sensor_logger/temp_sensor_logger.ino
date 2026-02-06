@@ -757,7 +757,8 @@ void queueUpload(const char *timestamp, SensorReading *readings, uint8_t count,
 // Build JSON payload for upload
 void buildJsonPayload(UploadBatch *batch, char *buffer, size_t bufferSize) {
   // Use ArduinoJson for efficient JSON building
-  StaticJsonDocument<2048> doc;
+  static StaticJsonDocument<1024> doc; // Static to save stack space
+  doc.clear();
 
   doc["site_id"] = SITE_ID;
   doc["device_id"] = DEVICE_ID;
@@ -816,7 +817,7 @@ void buildJsonPayload(UploadBatch *batch, char *buffer, size_t bufferSize) {
 
 // Upload a single batch via Serial
 bool uploadBatch(UploadBatch *batch) {
-  char jsonBuffer[2048];
+  static char jsonBuffer[1024]; // Static to save stack space
   buildJsonPayload(batch, jsonBuffer, sizeof(jsonBuffer));
 
   size_t len = strlen(jsonBuffer);
@@ -825,7 +826,7 @@ bool uploadBatch(UploadBatch *batch) {
 
   // Ensure previous prints are done
   Serial.flush();
-  delay(50); // Small pause for stability
+  delay(10); // Small pause for stability
 
   // Print with a special prefix so the Pi script can detect it
   Serial.print("JSON_UPLOAD:");
