@@ -61,13 +61,19 @@ def main():
                 if not line:
                     continue
 
-                # Check for magic prefix
                 if line.startswith("JSON_UPLOAD:"):
                     raw_json = line.replace("JSON_UPLOAD:", "", 1)
                     print(f"📦 Received JSON payload ({len(raw_json)} bytes)")
                     
                     try:
                         data = json.loads(raw_json)
+                        # Debug log for BME
+                        if 'environment_sensor' in data:
+                            env = data['environment_sensor']
+                            print(f"  [ENV] {env.get('sensor_name')} ({env.get('type')}): "
+                                  f"{env.get('temp_c')}°C, {env.get('humidity')}%, "
+                                  f"{env.get('pressure_hpa')}hPa, {env.get('gas_resistance_ohms')}Ω")
+                        
                         upload_to_heroku(data)
                     except json.JSONDecodeError as e:
                         print(f"❌ Invalid JSON received: {e}")
