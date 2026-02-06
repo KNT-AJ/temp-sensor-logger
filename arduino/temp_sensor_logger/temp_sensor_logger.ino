@@ -757,7 +757,7 @@ void queueUpload(const char *timestamp, SensorReading *readings, uint8_t count,
 // Build JSON payload for upload
 void buildJsonPayload(UploadBatch *batch, char *buffer, size_t bufferSize) {
   // Use ArduinoJson for efficient JSON building
-  static StaticJsonDocument<1024> doc; // Static to save stack space
+  static StaticJsonDocument<2560> doc; // Static to save stack space
   doc.clear();
 
   doc["site_id"] = SITE_ID;
@@ -817,7 +817,7 @@ void buildJsonPayload(UploadBatch *batch, char *buffer, size_t bufferSize) {
 
 // Upload a single batch via Serial
 bool uploadBatch(UploadBatch *batch) {
-  static char jsonBuffer[1024]; // Static to save stack space
+  static char jsonBuffer[2560]; // Static to save stack space
   buildJsonPayload(batch, jsonBuffer, sizeof(jsonBuffer));
 
   size_t len = strlen(jsonBuffer);
