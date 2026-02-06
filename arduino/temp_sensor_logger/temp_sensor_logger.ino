@@ -370,9 +370,7 @@ void setupWiFi() {
   IPAddress secondaryDNS(8, 8, 4, 4);
 
   Serial.println("Configuring Static IP...");
-  if (!WiFi.config(local_IP, primaryDNS, gateway, subnet)) {
-    Serial.println("Static IP Configuration Failed!");
-  }
+  WiFi.config(local_IP, primaryDNS, gateway, subnet);
 
   Serial.print("Connecting to WiFi: ");
   Serial.println(WIFI_SSID);
