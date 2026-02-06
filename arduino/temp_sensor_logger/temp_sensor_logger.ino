@@ -581,7 +581,7 @@ void logToSD(const char *timestamp, SensorReading *readings, uint8_t count,
     logFile.print(timestamp);
     logFile.print(",");
     logFile.print(DEVICE_ID);
-    logFile.print(",ENV01,I2C,N/A,N/A,"); // sensor_name=ENV01
+    logFile.print(",ATM01,I2C,N/A,N/A,"); // sensor_name=ATM01
     logFile.print(envTemp, 2);            // reuse raw temp slot for temp
     logFile.print(",");
     logFile.print(envTemp, 2); // reuse cal temp slot
@@ -851,7 +851,7 @@ void buildJsonPayload(UploadBatch *batch, char *buffer, size_t bufferSize) {
   // Add environment sensor data
   if (batch->bmeFound) {
     JsonObject envSensor = doc.createNestedObject("environment_sensor");
-    envSensor["sensor_name"] = "ENV01";
+    envSensor["sensor_name"] = "ATM01";
     envSensor["type"] = "BME680";
     envSensor["temp_c"] = serialized(String(batch->envTempC, 2));
     envSensor["humidity"] = serialized(String(batch->envHumidity, 2));
@@ -1368,7 +1368,7 @@ void sampleAndLog() {
   Serial.println(levelState ? "LIQUID DETECTED" : "NO LIQUID");
 
   if (bmeSuccess) {
-    Serial.print("  ENV01 (BME680): ");
+    Serial.print("  ATM01 (BME680): ");
     Serial.print(envTemp);
     Serial.print("C, ");
     Serial.print(envHum);
@@ -1378,7 +1378,7 @@ void sampleAndLog() {
     Serial.print(envGas / 1000.0);
     Serial.println(" KOhms");
   } else if (bmeFound) {
-    Serial.println("  ENV01 (BME680): READ ERROR");
+    Serial.println("  ATM01 (BME680): READ ERROR");
   }
 
   // Log to SD card (primary storage)

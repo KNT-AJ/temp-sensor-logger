@@ -70,7 +70,7 @@ def main():
                         # Debug log for BME
                         if 'environment_sensor' in data:
                             env = data['environment_sensor']
-                            print(f"  [ENV] {env.get('sensor_name')} ({env.get('type')}): "
+                            print(f"  [ATM] {env.get('sensor_name')} ({env.get('type')}): "
                                   f"{env.get('temp_c')}°C, {env.get('humidity')}%, "
                                   f"{env.get('pressure_hpa')}hPa, {env.get('gas_resistance_ohms')}Ω")
                         
