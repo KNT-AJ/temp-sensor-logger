@@ -68,7 +68,7 @@ sudo mv arduino-fwuploader /usr/local/bin/
 ```bash
 arduino-fwuploader certificates flash \
   -b arduino:renesas_uno:unor4wifi \
-  -a /dev/ttyACM0 \
+  -a /dev/ttyACM1 \
   -u temp-logger-1770077582-8b1b2ec536f6.herokuapp.com:443
 ```
 
@@ -78,7 +78,7 @@ arduino-fwuploader certificates flash \
 ```bash
 arduino-fwuploader firmware flash \
   -b arduino:renesas_uno:unor4wifi \
-  -a /dev/ttyACM0
+  -a /dev/ttyACM1
 ```
 
 ### Alternative: Arduino IDE 2 GUI (if available)

@@ -6,7 +6,7 @@ import sys
 import os
 
 # Configuration
-SERIAL_PORT = '/dev/ttyACM0'
+SERIAL_PORT = '/dev/ttyACM1'
 BAUD_RATE = 115200
 HEROKU_URL = "https://temp-logger-1770077582-8b1b2ec536f6.herokuapp.com/api/temps"
 API_KEY = "36e6e1669f7302366f067627383705a0"
