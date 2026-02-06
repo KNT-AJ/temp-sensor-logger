@@ -35,7 +35,7 @@
 // HTTP fallback URL (used when HTTPS fails)
 // Point to local proxy on Raspberry Pi that forwards to Heroku
 // Update PI_IP_ADDRESS to your Pi's local IP (e.g., 192.168.1.100)
-#define HEROKU_HTTP_URL "http://192.168.1.100:8080/api/temps"
+#define HEROKU_HTTP_URL "http://10.0.4.58:8080/api/temps"
 
 // Enable HTTP fallback after HTTPS failures
 #define USE_HTTP_FALLBACK 1
