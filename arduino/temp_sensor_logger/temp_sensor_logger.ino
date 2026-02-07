@@ -294,7 +294,7 @@ DallasTemperature sensorsBusA(&oneWireBusA);
 DallasTemperature sensorsBusB(&oneWireBusB);
 
 // BME680 Environment Sensor
-Adafruit_BME680 bme; // I2C
+Adafruit_BME680 bme(&Wire); // I2C — explicit Wire per Adafruit examples
 bool bmeFound = false;
 
 // Sensor registry
@@ -1340,86 +1340,53 @@ void processSerialCommands() {
     case 'B':
     case 'b': {
       Serial.println(F("\n=== BME680 Re-Init ==="));
+      // Tear down Wire so bme.begin() makes the FIRST Wire.begin() call
+      // on a freshly-recovered bus (avoids Renesas double-init issue)
       Serial.println(F("Running I2C bus recovery..."));
       Wire.end();
       i2cBusRecover();
       delay(500);
-      Wire.begin();
-      Wire.setClock(100000);
-      delay(100);
 
-      // Scan first
-      uint8_t bmeCount = 0;
-      for (uint8_t addr = 1; addr < 127; addr++) {
-        Wire.beginTransmission(addr);
-        if (Wire.endTransmission() == 0) {
-          Serial.print(F("  I2C device at 0x"));
-          if (addr < 16) Serial.print(F("0"));
-          Serial.println(addr, HEX);
-          bmeCount++;
+      bmeFound = false;
+
+      for (uint8_t attempt = 1; attempt <= 5 && !bmeFound; attempt++) {
+        Serial.print(F("  BME680 init attempt "));
+        Serial.print(attempt);
+        Serial.println(F("/5..."));
+
+        if (bme.begin(0x77)) {
+          Serial.println(F("  BME680 Found at 0x77!"));
+          bmeFound = true;
+        } else if (bme.begin(0x76)) {
+          Serial.println(F("  BME680 Found at 0x76!"));
+          bmeFound = true;
+        } else {
+          Serial.println(F("  bme.begin() failed, recovering bus..."));
+          Wire.end();
+          i2cBusRecover();
+          delay(500);
         }
       }
-      if (bmeCount == 0) {
-        Serial.println(F("  No I2C devices! Cannot init BME680."));
+
+      if (bmeFound) {
+        bme.setTemperatureOversampling(BME680_OS_8X);
+        bme.setHumidityOversampling(BME680_OS_2X);
+        bme.setPressureOversampling(BME680_OS_4X);
+        bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
+        bme.setGasHeater(320, 150);
+        Serial.println(F("  BME680 configured and ready!"));
       } else {
-        // Read raw chip ID at register 0xD0 for diagnostics
-        // BME680 = 0x61, BME280 = 0x60, BMP280 = 0x58
-        for (uint8_t testAddr : {0x77, 0x76}) {
-          Wire.beginTransmission(testAddr);
-          Wire.write(0xD0); // Chip ID register
+        Serial.println(F("  FAILED: Could not init BME680."));
+        // Diagnostic I2C scan to show what's on the bus
+        Wire.begin();
+        Wire.setClock(100000);
+        for (uint8_t addr = 1; addr < 127; addr++) {
+          Wire.beginTransmission(addr);
           if (Wire.endTransmission() == 0) {
-            Wire.requestFrom(testAddr, (uint8_t)1);
-            if (Wire.available()) {
-              uint8_t chipId = Wire.read();
-              Serial.print(F("  Chip ID at 0x"));
-              Serial.print(testAddr, HEX);
-              Serial.print(F(": 0x"));
-              Serial.print(chipId, HEX);
-              if (chipId == 0x61) Serial.println(F(" (BME680)"));
-              else if (chipId == 0x60) Serial.println(F(" (BME280)"));
-              else if (chipId == 0x58) Serial.println(F(" (BMP280)"));
-              else Serial.println(F(" (UNKNOWN)"));
-            } else {
-              Serial.print(F("  No data from 0x"));
-              Serial.println(testAddr, HEX);
-            }
+            Serial.print(F("  I2C device at 0x"));
+            if (addr < 16) Serial.print(F("0"));
+            Serial.println(addr, HEX);
           }
-        }
-
-        bmeFound = false;
-
-        // Manual soft-reset of BME680
-        Wire.beginTransmission(0x77);
-        Wire.write(0xE0);
-        Wire.write(0xB6);
-        Wire.endTransmission();
-        delay(100);
-
-        for (uint8_t attempt = 1; attempt <= 5 && !bmeFound; attempt++) {
-          Serial.print(F("  BME680 init attempt "));
-          Serial.print(attempt);
-          Serial.println(F("/5..."));
-
-          if (bme.begin(0x77, &Wire)) {
-            Serial.println(F("  BME680 Found at 0x77!"));
-            bmeFound = true;
-          } else if (bme.begin(0x76, &Wire)) {
-            Serial.println(F("  BME680 Found at 0x76!"));
-            bmeFound = true;
-          } else {
-            Serial.println(F("  bme.begin() failed"));
-            delay(500);
-          }
-        }
-        if (bmeFound) {
-          bme.setTemperatureOversampling(BME680_OS_8X);
-          bme.setHumidityOversampling(BME680_OS_2X);
-          bme.setPressureOversampling(BME680_OS_4X);
-          bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
-          bme.setGasHeater(320, 150);
-          Serial.println(F("  BME680 configured and ready!"));
-        } else {
-          Serial.println(F("  FAILED: Could not init BME680."));
         }
       }
       Serial.println(F("========================\n"));
@@ -1602,61 +1569,13 @@ void setup() {
   i2cBusRecover();
   delay(500); // Give sensor/power rails time to settle
 
-  // I2C bus scan — diagnose what's connected
-  Serial.println("Scanning I2C bus...");
-  Wire.begin();
-  Wire.setClock(100000); // standard mode 100 kHz
-  delay(100); // Let Wire settle
-  uint8_t i2cCount = 0;
-  for (uint8_t addr = 1; addr < 127; addr++) {
-    Wire.beginTransmission(addr);
-    if (Wire.endTransmission() == 0) {
-      Serial.print("  I2C device found at 0x");
-      if (addr < 16) Serial.print("0");
-      Serial.println(addr, HEX);
-      i2cCount++;
-    }
-  }
-  if (i2cCount == 0) {
-    Serial.println("  No I2C devices found! Check SDA/SCL wiring.");
-  } else {
-    Serial.print("  Total I2C devices: ");
-    Serial.println(i2cCount);
-
-    // Read raw chip ID at 0x77 and 0x76 for diagnostics
-    for (uint8_t testAddr : {0x77, 0x76}) {
-      Wire.beginTransmission(testAddr);
-      Wire.write(0xD0); // Chip ID register
-      if (Wire.endTransmission() == 0) {
-        Wire.requestFrom(testAddr, (uint8_t)1);
-        if (Wire.available()) {
-          uint8_t chipId = Wire.read();
-          Serial.print("  Chip ID at 0x");
-          Serial.print(testAddr, HEX);
-          Serial.print(": 0x");
-          Serial.print(chipId, HEX);
-          if (chipId == 0x61) Serial.println(" (BME680)");
-          else if (chipId == 0x60) Serial.println(" (BME280)");
-          else if (chipId == 0x58) Serial.println(" (BMP280)");
-          else Serial.println(" (UNKNOWN)");
-        }
-      }
-    }
-  }
-
-  // Initialize BME680 (with retries)
-  // IMPORTANT: Do NOT call Wire.end() between attempts. The Renesas (R4 WiFi)
-  // I2C driver doesn't handle repeated end/begin cycles reliably. Since we've
-  // confirmed Wire works (chip ID reads fine above), keep it running and let
-  // bme.begin() use the existing Wire instance.
+  // Initialize BME680 FIRST, before any Wire.begin() calls.
+  // CRITICAL: The Adafruit library calls Wire.begin() internally.
+  // On the Renesas RA4M1 (Uno R4 WiFi), calling Wire.begin() a second
+  // time re-initializes the I2C peripheral and can leave the BME680 in
+  // a stuck state. So we must let bme.begin() make the FIRST and ONLY
+  // Wire.begin() call, on a bus that was just recovered.
   Serial.println("Initializing BME680...");
-
-  // Manual soft-reset of BME680 before library init
-  Wire.beginTransmission(0x77);
-  Wire.write(0xE0); // Soft reset register
-  Wire.write(0xB6); // Reset command
-  Wire.endTransmission();
-  delay(100); // Wait for sensor to come back after reset
 
   const uint8_t BME_MAX_RETRIES = 5;
   for (uint8_t attempt = 1; attempt <= BME_MAX_RETRIES && !bmeFound; attempt++) {
@@ -1666,14 +1585,17 @@ void setup() {
     Serial.print(BME_MAX_RETRIES);
     Serial.println("...");
 
-    if (bme.begin(0x77, &Wire)) {
+    if (bme.begin(0x77)) {
       Serial.println("  BME680 Found at 0x77!");
       bmeFound = true;
-    } else if (bme.begin(0x76, &Wire)) {
+    } else if (bme.begin(0x76)) {
       Serial.println("  BME680 Found at 0x76!");
       bmeFound = true;
     } else {
       Serial.println("  bme.begin() failed, retrying...");
+      // Bus recovery between retries in case the failed begin() left bus dirty
+      Wire.end();
+      i2cBusRecover();
       delay(500);
     }
   }
@@ -1681,10 +1603,25 @@ void setup() {
   if (!bmeFound) {
     Serial.println("WARNING: Could not find BME680 after all retries.");
     Serial.println("  Use serial command 'B' to re-try after boot.");
-    // Make sure Wire is up for other I2C users
+    // Ensure Wire is up for other I2C users
     Wire.begin();
     Wire.setClock(100000);
   }
+
+  // Diagnostic I2C scan — show what's on the bus (Wire is now up)
+  Serial.println("Scanning I2C bus...");
+  uint8_t i2cCount = 0;
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      Serial.print("  I2C device at 0x");
+      if (addr < 16) Serial.print("0");
+      Serial.println(addr, HEX);
+      i2cCount++;
+    }
+  }
+  Serial.print("  Total I2C devices: ");
+  Serial.println(i2cCount);
 
   if (bmeFound) {
     // Set up oversampling and filter initialization
