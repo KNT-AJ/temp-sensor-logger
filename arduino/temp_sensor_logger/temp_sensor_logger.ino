@@ -1362,12 +1362,42 @@ void processSerialCommands() {
       if (bmeCount == 0) {
         Serial.println(F("  No I2C devices! Cannot init BME680."));
       } else {
+        // Read raw chip ID at register 0xD0 for diagnostics
+        // BME680 = 0x61, BME280 = 0x60, BMP280 = 0x58
+        for (uint8_t testAddr : {0x77, 0x76}) {
+          Wire.beginTransmission(testAddr);
+          Wire.write(0xD0); // Chip ID register
+          if (Wire.endTransmission() == 0) {
+            Wire.requestFrom(testAddr, (uint8_t)1);
+            if (Wire.available()) {
+              uint8_t chipId = Wire.read();
+              Serial.print(F("  Chip ID at 0x"));
+              Serial.print(testAddr, HEX);
+              Serial.print(F(": 0x"));
+              Serial.print(chipId, HEX);
+              if (chipId == 0x61) Serial.println(F(" (BME680)"));
+              else if (chipId == 0x60) Serial.println(F(" (BME280)"));
+              else if (chipId == 0x58) Serial.println(F(" (BMP280)"));
+              else Serial.println(F(" (UNKNOWN)"));
+            } else {
+              Serial.print(F("  No data from 0x"));
+              Serial.println(testAddr, HEX);
+            }
+          }
+        }
+
         bmeFound = false;
         delay(250);
         for (uint8_t attempt = 1; attempt <= 5 && !bmeFound; attempt++) {
           Serial.print(F("  BME680 init attempt "));
           Serial.print(attempt);
           Serial.println(F("/5..."));
+
+          // Wire.end + recovery before each attempt
+          Wire.end();
+          i2cBusRecover();
+          delay(500);
+
           if (bme.begin(0x77)) {
             Serial.println(F("  BME680 Found at 0x77!"));
             bmeFound = true;
@@ -1375,7 +1405,7 @@ void processSerialCommands() {
             Serial.println(F("  BME680 Found at 0x76!"));
             bmeFound = true;
           } else {
-            delay(500);
+            Serial.println(F("  bme.begin() failed"));
           }
         }
         if (bmeFound) {
@@ -1387,6 +1417,9 @@ void processSerialCommands() {
           Serial.println(F("  BME680 configured and ready!"));
         } else {
           Serial.println(F("  FAILED: Could not init BME680."));
+          // Ensure Wire is back up
+          Wire.begin();
+          Wire.setClock(100000);
         }
       }
       Serial.println(F("========================\n"));
@@ -1589,6 +1622,26 @@ void setup() {
   } else {
     Serial.print("  Total I2C devices: ");
     Serial.println(i2cCount);
+
+    // Read raw chip ID at 0x77 and 0x76 for diagnostics
+    for (uint8_t testAddr : {0x77, 0x76}) {
+      Wire.beginTransmission(testAddr);
+      Wire.write(0xD0); // Chip ID register
+      if (Wire.endTransmission() == 0) {
+        Wire.requestFrom(testAddr, (uint8_t)1);
+        if (Wire.available()) {
+          uint8_t chipId = Wire.read();
+          Serial.print("  Chip ID at 0x");
+          Serial.print(testAddr, HEX);
+          Serial.print(": 0x");
+          Serial.print(chipId, HEX);
+          if (chipId == 0x61) Serial.println(" (BME680)");
+          else if (chipId == 0x60) Serial.println(" (BME280)");
+          else if (chipId == 0x58) Serial.println(" (BMP280)");
+          else Serial.println(" (UNKNOWN)");
+        }
+      }
+    }
   }
 
   // Initialize BME680 (with retries — sensor may need time after power-on)
