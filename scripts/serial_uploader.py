@@ -61,19 +61,18 @@ def main():
 
     # Don't clear buffer - we want to see startup messages (BME680 init, etc.)
 
-    # Sync Time — send Central Time (America/Chicago) epoch to Arduino
-    # The Arduino will format this as local Central timestamps.
-    # zoneinfo handles DST automatically (CST = UTC-6, CDT = UTC-5).
+    # Sync Time — send UTC epoch to Arduino.
+    # The Arduino's setTime() adds TIMEZONE_OFFSET (-6h) to convert
+    # to Central Time internally. Sending a pre-adjusted CT epoch
+    # would cause a double-offset (CT - 6h = UTC-12h).
     try:
         now_utc = datetime.now(timezone.utc)
         now_central = now_utc.astimezone(CENTRAL_TZ)
-        # Calculate Unix-style epoch but in Central time
-        # (offset from UTC so Arduino's TimeLib shows Central time)
-        utc_offset_seconds = int(now_central.utcoffset().total_seconds())
-        central_epoch = int(time.time()) + utc_offset_seconds
+        utc_epoch = int(time.time())
         tz_name = now_central.strftime('%Z')  # CST or CDT
-        print(f"[CLOCK] Syncing Central Time ({tz_name}, UTC{utc_offset_seconds//3600:+d}) epoch={central_epoch}")
-        ser.write(f"C{central_epoch}\n".encode('utf-8'))
+        utc_offset_hours = int(now_central.utcoffset().total_seconds()) // 3600
+        print(f"[CLOCK] Syncing time ({tz_name}, UTC{utc_offset_hours:+d}) epoch={utc_epoch} (UTC; Arduino applies TZ offset)")
+        ser.write(f"C{utc_epoch}\n".encode('utf-8'))
         time.sleep(0.5) # Give it a moment to process
     except Exception as e:
         print(f"[WARN] Failed to sync time: {e}")

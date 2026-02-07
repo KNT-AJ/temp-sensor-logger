@@ -184,9 +184,10 @@ app.post('/api/temps', validateApiKey, async (req, res) => {
       const client = await pool.connect();
 
       // Handle timestamps — all stored in US Central Time (America/Chicago)
-      // The Arduino sends naive ISO timestamps already in Central Time
-      // (the Pi syncs Central epoch). We append the correct CT offset
-      // so PostgreSQL stores them with proper timezone info.
+      // The Arduino sends naive ISO timestamps in Central Time
+      // (Pi sends UTC epoch, Arduino applies TIMEZONE_OFFSET to get CT).
+      // We append the correct CT offset so PostgreSQL stores them
+      // with proper timezone info.
       let dbTimestamp;
       const ctOffset = getCentralOffset(); // -06:00 (CST) or -05:00 (CDT)
       if (body.timestamp.startsWith('UPTIME+')) {
