@@ -14,6 +14,30 @@ require('dotenv').config();
 const express = require('express');
 const app = express();
 
+/**
+ * Get the current US Central Time UTC offset string (-06:00 or -05:00).
+ * Uses Intl API so DST transitions are handled automatically.
+ */
+function getCentralOffset() {
+  const now = new Date();
+  // Get offset in minutes for America/Chicago
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago',
+    timeZoneName: 'shortOffset'
+  }).formatToParts(now);
+  const tzPart = parts.find(p => p.type === 'timeZoneName');
+  // tzPart.value is like "GMT-6" or "GMT-5"
+  if (tzPart) {
+    const match = tzPart.value.match(/GMT([+-]\d+)/);
+    if (match) {
+      const hours = parseInt(match[1]);
+      const sign = hours < 0 ? '-' : '+';
+      return `${sign}${String(Math.abs(hours)).padStart(2, '0')}:00`;
+    }
+  }
+  return '-06:00'; // fallback to CST
+}
+
 // PostgreSQL client (optional)
 let pool = null;
 if (process.env.DATABASE_URL) {
@@ -159,15 +183,24 @@ app.post('/api/temps', validateApiKey, async (req, res) => {
     try {
       const client = await pool.connect();
 
-      // Handle UPTIME timestamps by using current server time in CT (Central Time)
+      // Handle timestamps — all stored in US Central Time (America/Chicago)
+      // The Arduino sends naive ISO timestamps already in Central Time
+      // (the Pi syncs Central epoch). We append the correct CT offset
+      // so PostgreSQL stores them with proper timezone info.
       let dbTimestamp;
+      const ctOffset = getCentralOffset(); // -06:00 (CST) or -05:00 (CDT)
       if (body.timestamp.startsWith('UPTIME+')) {
-        // Create timestamp in Central Time (UTC-6)
+        // Fallback: use server time converted to Central
         const now = new Date();
-        dbTimestamp = new Date(now.getTime() - (6 * 60 * 60 * 1000)).toISOString();
+        const centralStr = now.toLocaleString('sv-SE', { timeZone: 'America/Chicago' });
+        // sv-SE locale gives YYYY-MM-DD HH:MM:SS format
+        dbTimestamp = centralStr.replace(' ', 'T') + ctOffset;
         console.log(`Converted UPTIME to CT: ${dbTimestamp}`);
       } else {
-        dbTimestamp = body.timestamp;
+        // Arduino timestamp is already Central time (naive ISO string)
+        // Append the Central offset so PostgreSQL interprets it correctly
+        dbTimestamp = body.timestamp + ctOffset;
+        console.log(`Timestamp with CT offset: ${dbTimestamp}`);
       }
 
       try {

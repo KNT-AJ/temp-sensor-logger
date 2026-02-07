@@ -5,6 +5,14 @@ import requests
 import sys
 import os
 import glob
+from datetime import datetime, timezone
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
+
+CENTRAL_TZ = ZoneInfo('America/Chicago')
 
 # Configuration
 SERIAL_PORT = '/dev/ttyACM0'
@@ -53,12 +61,19 @@ def main():
 
     # Don't clear buffer - we want to see startup messages (BME680 init, etc.)
 
-    # Sync Time
+    # Sync Time — send Central Time (America/Chicago) epoch to Arduino
+    # The Arduino will format this as local Central timestamps.
+    # zoneinfo handles DST automatically (CST = UTC-6, CDT = UTC-5).
     try:
-        current_time = int(time.time())
-        print(f"[CLOCK] Syncing time to {current_time}...")
-        # Send 'C' command followed by timestamp and newline
-        ser.write(f"C{current_time}\n".encode('utf-8'))
+        now_utc = datetime.now(timezone.utc)
+        now_central = now_utc.astimezone(CENTRAL_TZ)
+        # Calculate Unix-style epoch but in Central time
+        # (offset from UTC so Arduino's TimeLib shows Central time)
+        utc_offset_seconds = int(now_central.utcoffset().total_seconds())
+        central_epoch = int(time.time()) + utc_offset_seconds
+        tz_name = now_central.strftime('%Z')  # CST or CDT
+        print(f"[CLOCK] Syncing Central Time ({tz_name}, UTC{utc_offset_seconds//3600:+d}) epoch={central_epoch}")
+        ser.write(f"C{central_epoch}\n".encode('utf-8'))
         time.sleep(0.5) # Give it a moment to process
     except Exception as e:
         print(f"[WARN] Failed to sync time: {e}")
