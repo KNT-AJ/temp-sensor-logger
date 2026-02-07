@@ -1019,7 +1019,8 @@ void printHelp() {
   Serial.println(F("  S - Show status"));
   Serial.println(F("  T - Tail current log file"));
   Serial.println(F("  C<unix_timestamp> - Sync Clock"));
-  Serial.println(F("  I - I2C bus scan"));
+  Serial.println(F("  I - I2C bus recovery + scan"));
+  Serial.println(F("  B - Re-init BME680 sensor"));
   Serial.println(F("  H - Show this help"));
   Serial.println(F("========================\n"));
 }
@@ -1336,6 +1337,61 @@ void processSerialCommands() {
       Serial.println(F("===================\n"));
     } break;
 
+    case 'B':
+    case 'b': {
+      Serial.println(F("\n=== BME680 Re-Init ==="));
+      Serial.println(F("Running I2C bus recovery..."));
+      Wire.end();
+      i2cBusRecover();
+      delay(500);
+      Wire.begin();
+      Wire.setClock(100000);
+      delay(100);
+
+      // Scan first
+      uint8_t bmeCount = 0;
+      for (uint8_t addr = 1; addr < 127; addr++) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission() == 0) {
+          Serial.print(F("  I2C device at 0x"));
+          if (addr < 16) Serial.print(F("0"));
+          Serial.println(addr, HEX);
+          bmeCount++;
+        }
+      }
+      if (bmeCount == 0) {
+        Serial.println(F("  No I2C devices! Cannot init BME680."));
+      } else {
+        bmeFound = false;
+        delay(250);
+        for (uint8_t attempt = 1; attempt <= 5 && !bmeFound; attempt++) {
+          Serial.print(F("  BME680 init attempt "));
+          Serial.print(attempt);
+          Serial.println(F("/5..."));
+          if (bme.begin(0x77)) {
+            Serial.println(F("  BME680 Found at 0x77!"));
+            bmeFound = true;
+          } else if (bme.begin(0x76)) {
+            Serial.println(F("  BME680 Found at 0x76!"));
+            bmeFound = true;
+          } else {
+            delay(500);
+          }
+        }
+        if (bmeFound) {
+          bme.setTemperatureOversampling(BME680_OS_8X);
+          bme.setHumidityOversampling(BME680_OS_2X);
+          bme.setPressureOversampling(BME680_OS_4X);
+          bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
+          bme.setGasHeater(320, 150);
+          Serial.println(F("  BME680 configured and ready!"));
+        } else {
+          Serial.println(F("  FAILED: Could not init BME680."));
+        }
+      }
+      Serial.println(F("========================\n"));
+    } break;
+
     case 'H':
     case 'h':
     case '?':
@@ -1511,11 +1567,13 @@ void setup() {
   // I2C bus recovery — release any slave holding SDA low after a reset
   Serial.println("Running I2C bus recovery...");
   i2cBusRecover();
+  delay(500); // Give sensor/power rails time to settle
 
   // I2C bus scan — diagnose what's connected
   Serial.println("Scanning I2C bus...");
   Wire.begin();
   Wire.setClock(100000); // standard mode 100 kHz
+  delay(100); // Let Wire settle
   uint8_t i2cCount = 0;
   for (uint8_t addr = 1; addr < 127; addr++) {
     Wire.beginTransmission(addr);
