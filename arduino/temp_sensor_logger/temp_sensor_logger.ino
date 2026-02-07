@@ -1666,9 +1666,7 @@ void setup() {
       Serial.println("  BME680 Found at 0x77!");
       bmeFound = true;
     } else {
-      // Print diagnostic: what did the library manage to read?
-      Serial.print("  FAILED. gas_sensor.chip_id=0x");
-      Serial.println(bme.gas_sensor.chip_id, HEX);
+      Serial.println("  FAILED.");
       if (attempt < BME_MAX_RETRIES) {
         Serial.println("  Retrying after bus recovery...");
         Wire.end();
