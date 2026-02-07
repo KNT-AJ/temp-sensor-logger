@@ -268,6 +268,9 @@ void queueUpload(const char *timestamp, SensorReading *readings, uint8_t count,
 void buildJsonPayload(UploadBatch *batch, char *buffer, size_t bufferSize);
 bool uploadBatch(UploadBatch *batch);
 
+// I2C bus recovery
+void i2cBusRecover();
+
 // Serial command handling
 void processSerialCommands();
 void printHelp();
@@ -322,6 +325,43 @@ bool useHttpFallback = false;
 // Current date for log file rotation
 char currentLogDate[12] = "";
 char currentLogPath[32] = "";
+
+// ============================================================================
+// I2C BUS RECOVERY
+// ============================================================================
+// Clocks SCL 9 times to release a slave that may be holding SDA low after
+// an interrupted transaction (e.g. Arduino reset mid-read).  Finishes with
+// a STOP condition so the bus is clean before Wire.begin().
+void i2cBusRecover() {
+  pinMode(SCL, OUTPUT);
+  pinMode(SDA, OUTPUT);
+
+  // Release lines high
+  digitalWrite(SCL, HIGH);
+  digitalWrite(SDA, HIGH);
+  delayMicroseconds(10);
+
+  // Clock SCL 9 times to clear any stuck slave state
+  for (int i = 0; i < 9; i++) {
+    digitalWrite(SCL, LOW);
+    delayMicroseconds(10);
+    digitalWrite(SCL, HIGH);
+    delayMicroseconds(10);
+  }
+
+  // Generate a STOP condition: SDA low -> SCL high -> SDA high
+  digitalWrite(SDA, LOW);
+  delayMicroseconds(10);
+  digitalWrite(SCL, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(SDA, HIGH);
+  delayMicroseconds(10);
+
+  // Let the lines float back to pull-ups
+  pinMode(SDA, INPUT_PULLUP);
+  pinMode(SCL, INPUT_PULLUP);
+  delay(5);
+}
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -1271,7 +1311,12 @@ void processSerialCommands() {
 
     case 'I':
     case 'i': {
-      Serial.println(F("\n=== I2C Bus Scan ==="));
+      Serial.println(F("\n=== I2C Bus Recovery + Scan ==="));
+      Wire.end();
+      i2cBusRecover();
+      Wire.begin();
+      Wire.setClock(100000);
+      delay(50);
       uint8_t count = 0;
       for (uint8_t addr = 1; addr < 127; addr++) {
         Wire.beginTransmission(addr);
@@ -1463,9 +1508,14 @@ void setup() {
   // Initialize level sensor pin
   pinMode(LEVEL_SENSOR_PIN, INPUT);
 
+  // I2C bus recovery — release any slave holding SDA low after a reset
+  Serial.println("Running I2C bus recovery...");
+  i2cBusRecover();
+
   // I2C bus scan — diagnose what's connected
   Serial.println("Scanning I2C bus...");
   Wire.begin();
+  Wire.setClock(100000); // standard mode 100 kHz
   uint8_t i2cCount = 0;
   for (uint8_t addr = 1; addr < 127; addr++) {
     Wire.beginTransmission(addr);
