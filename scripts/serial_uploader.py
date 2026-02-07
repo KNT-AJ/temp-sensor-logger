@@ -63,6 +63,15 @@ def main():
     except Exception as e:
         print(f"[WARN] Failed to sync time: {e}")
 
+    # Trigger BME680 re-init (I2C bus recovery + bme.begin)
+    # This is a safety net in case the boot-time init failed.
+    try:
+        print("[BME] Sending BME680 re-init command (B)...")
+        ser.write(b"B\n")
+        time.sleep(4) # Give it time to do recovery + 5 init attempts
+    except Exception as e:
+        print(f"[WARN] Failed to send BME re-init: {e}")
+
     while True:
         try:
             if ser.in_waiting > 0:

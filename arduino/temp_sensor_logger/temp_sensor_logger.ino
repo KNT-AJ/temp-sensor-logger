@@ -1592,10 +1592,15 @@ void setup() {
   }
 
   // Initialize BME680 (with retries — sensor may need time after power-on)
+  // Wire.end() + recovery before bme.begin() because the Adafruit library
+  // calls Wire.begin() internally, which on the Uno R4 WiFi (Renesas) can
+  // re-initialize the I2C peripheral and undo our recovery.
   Serial.println("Initializing BME680...");
-  delay(250); // Let I2C bus settle after scan
+  Wire.end();
+  i2cBusRecover();
+  delay(500);
 
-  const uint8_t BME_MAX_RETRIES = 3;
+  const uint8_t BME_MAX_RETRIES = 5;
   for (uint8_t attempt = 1; attempt <= BME_MAX_RETRIES && !bmeFound; attempt++) {
     Serial.print("  Attempt ");
     Serial.print(attempt);
@@ -1610,13 +1615,19 @@ void setup() {
       Serial.println("  BME680 Found at 0x76!");
       bmeFound = true;
     } else {
-      Serial.println("  Not detected, retrying...");
-      delay(500); // Wait before retry
+      Serial.println("  Not detected, recovering bus and retrying...");
+      Wire.end();
+      i2cBusRecover();
+      delay(500);
     }
   }
 
   if (!bmeFound) {
-    Serial.println("ERROR: Could not find BME680 after all retries. Check wiring!");
+    Serial.println("WARNING: Could not find BME680 after all retries.");
+    Serial.println("  Use serial command 'B' to re-try after boot.");
+    // Make sure Wire is up for other I2C users
+    Wire.begin();
+    Wire.setClock(100000);
   }
 
   if (bmeFound) {
