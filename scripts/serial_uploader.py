@@ -17,7 +17,7 @@ def find_arduino_port():
     candidates = sorted(glob.glob('/dev/ttyACM*'))
     if candidates:
         port = candidates[0]
-        print(f"🔍 Auto-detected Arduino port: {port}")
+        print(f"[DETECT] Auto-detected Arduino port: {port}")
         return port
     return SERIAL_PORT  # fallback to default
 
@@ -31,24 +31,24 @@ def upload_to_heroku(json_data):
         response = requests.post(HEROKU_URL, json=json_data, headers=headers, timeout=10)
         
         if response.status_code in [200, 201]:
-            print(f"✅ Success: Uploaded to Heroku (Status {response.status_code})")
+            print(f"[OK] Uploaded to Heroku (Status {response.status_code})")
         else:
-            print(f"❌ Error: Heroku returned {response.status_code}: {response.text}")
+            print(f"[ERROR] Heroku returned {response.status_code}: {response.text}")
             
     except Exception as e:
-        print(f"❌ Error uploading to Heroku: {e}")
+        print(f"[ERROR] Upload to Heroku failed: {e}")
 
 def main():
     port = find_arduino_port()
-    print(f"🔌 Connecting to {port} @ {BAUD_RATE}...")
+    print(f"[SERIAL] Connecting to {port} @ {BAUD_RATE}...")
     
     try:
         ser = serial.Serial(port, BAUD_RATE, timeout=2)
         ser.dtr = True # Force DTR to reset/wake Uno R4
         time.sleep(3) # Wait for Arduino to boot and print init messages
-        print("✅ Serial connected. Listening for data...")
+        print("[OK] Serial connected. Listening for data...")
     except Exception as e:
-        print(f"❌ Could not open serial port {port}: {e}")
+        print(f"[ERROR] Could not open serial port {port}: {e}")
         sys.exit(1)
 
     # Don't clear buffer - we want to see startup messages (BME680 init, etc.)
@@ -56,12 +56,12 @@ def main():
     # Sync Time
     try:
         current_time = int(time.time())
-        print(f"🕒 Syncing time to {current_time}...")
+        print(f"[CLOCK] Syncing time to {current_time}...")
         # Send 'C' command followed by timestamp and newline
         ser.write(f"C{current_time}\n".encode('utf-8'))
         time.sleep(0.5) # Give it a moment to process
     except Exception as e:
-        print(f"⚠️ Failed to sync time: {e}")
+        print(f"[WARN] Failed to sync time: {e}")
 
     while True:
         try:
@@ -73,7 +73,7 @@ def main():
 
                 if line.startswith("JSON_UPLOAD:"):
                     raw_json = line.replace("JSON_UPLOAD:", "", 1)
-                    print(f"📦 Received JSON payload ({len(raw_json)} bytes)")
+                    print(f"[JSON] Received payload ({len(raw_json)} bytes)")
                     
                     try:
                         data = json.loads(raw_json)
@@ -81,12 +81,12 @@ def main():
                         if 'environment_sensor' in data:
                             env = data['environment_sensor']
                             print(f"  [ATM] {env.get('sensor_name')} ({env.get('type')}): "
-                                  f"{env.get('temp_c')}°C, {env.get('humidity')}%, "
-                                  f"{env.get('pressure_hpa')}hPa, {env.get('gas_resistance_ohms')}Ω")
+                                  f"{env.get('temp_c')}C, {env.get('humidity')}%, "
+                                  f"{env.get('pressure_hpa')}hPa, {env.get('gas_resistance_ohms')}ohms")
                         
                         upload_to_heroku(data)
                     except json.JSONDecodeError as e:
-                        print(f"❌ Invalid JSON received: {e}")
+                        print(f"[ERROR] Invalid JSON received: {e}")
                 else:
                     # Just a regular debug log from Arduino
                     print(f"[Arduino] {line}")
@@ -97,7 +97,7 @@ def main():
             print("\nExiting...")
             break
         except Exception as e:
-            print(f"⚠️ Serial Loop Error: {e}")
+            print(f"[WARN] Serial Loop Error: {e}")
             time.sleep(1)
 
 if __name__ == "__main__":
