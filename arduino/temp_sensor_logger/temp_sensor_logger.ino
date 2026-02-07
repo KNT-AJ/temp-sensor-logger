@@ -879,14 +879,26 @@ bool uploadBatch(UploadBatch *batch) {
   Serial.print("Generated JSON payload size: ");
   Serial.println(len);
 
-  // Ensure previous prints are done
+  // Flush all pending output and pause to let the Pi reader catch up.
+  // Without this, debug lines + large JSON blob overflow the USB CDC buffer
+  // and cause garbled/dropped bytes on the receiving end.
   Serial.flush();
-  delay(10); // Small pause for stability
+  delay(100);
 
-  // Print with a special prefix so the Pi script can detect it
+  // Send JSON in chunks to avoid overwhelming the USB serial buffer.
+  // The Uno R4 WiFi USB CDC buffer is limited; large single writes can
+  // drop bytes if the host hasn't drained the buffer in time.
   Serial.print("JSON_UPLOAD:");
-  Serial.println(jsonBuffer);
-  Serial.flush(); // Ensure JSON is fully sent
+  const size_t CHUNK = 128;
+  for (size_t i = 0; i < len; i += CHUNK) {
+    size_t remaining = len - i;
+    size_t toSend = (remaining < CHUNK) ? remaining : CHUNK;
+    Serial.write((const uint8_t *)&jsonBuffer[i], toSend);
+    Serial.flush();
+  }
+  Serial.println(); // Terminate the line
+  Serial.flush();
+  delay(50);
 
   // We assume success since Serial is reliable.
   // The Pi will be responsible for the actual HTTP upload.
@@ -1350,7 +1362,8 @@ void sampleAndLog() {
   // Read level sensor
   bool levelState = (digitalRead(LEVEL_SENSOR_PIN) == HIGH);
 
-  // Print summary
+  // Print summary — flush first to avoid interleaving with prior output
+  Serial.flush();
   Serial.println("\n--- Sample Cycle ---");
   Serial.print("Time: ");
   Serial.println(timestamp);
@@ -1470,17 +1483,32 @@ void setup() {
     Serial.println(i2cCount);
   }
 
-  // Initialize BME680
+  // Initialize BME680 (with retries — sensor may need time after power-on)
   Serial.println("Initializing BME680...");
-  if (bme.begin(0x77)) {
-    Serial.println("BME680 Found at 0x77!");
-    bmeFound = true;
-  } else if (bme.begin(0x76)) {
-    Serial.println("BME680 Found at 0x76!");
-    bmeFound = true;
-  } else {
-    Serial.println("Could not find BME680 at 0x77 or 0x76, check wiring!");
-    bmeFound = false;
+  delay(250); // Let I2C bus settle after scan
+
+  const uint8_t BME_MAX_RETRIES = 3;
+  for (uint8_t attempt = 1; attempt <= BME_MAX_RETRIES && !bmeFound; attempt++) {
+    Serial.print("  Attempt ");
+    Serial.print(attempt);
+    Serial.print("/");
+    Serial.print(BME_MAX_RETRIES);
+    Serial.println("...");
+
+    if (bme.begin(0x77)) {
+      Serial.println("  BME680 Found at 0x77!");
+      bmeFound = true;
+    } else if (bme.begin(0x76)) {
+      Serial.println("  BME680 Found at 0x76!");
+      bmeFound = true;
+    } else {
+      Serial.println("  Not detected, retrying...");
+      delay(500); // Wait before retry
+    }
+  }
+
+  if (!bmeFound) {
+    Serial.println("ERROR: Could not find BME680 after all retries. Check wiring!");
   }
 
   if (bmeFound) {

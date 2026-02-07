@@ -43,7 +43,7 @@ def main():
     print(f"🔌 Connecting to {port} @ {BAUD_RATE}...")
     
     try:
-        ser = serial.Serial(port, BAUD_RATE, timeout=1)
+        ser = serial.Serial(port, BAUD_RATE, timeout=2)
         ser.dtr = True # Force DTR to reset/wake Uno R4
         time.sleep(3) # Wait for Arduino to boot and print init messages
         print("✅ Serial connected. Listening for data...")
