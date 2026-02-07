@@ -1340,31 +1340,106 @@ void processSerialCommands() {
     case 'B':
     case 'b': {
       Serial.println(F("\n=== BME680 Re-Init ==="));
-      // Tear down Wire so bme.begin() makes the FIRST Wire.begin() call
-      // on a freshly-recovered bus (avoids Renesas double-init issue)
       Serial.println(F("Running I2C bus recovery..."));
       Wire.end();
       i2cBusRecover();
       delay(500);
 
+      // Step-by-step I2C diagnostic (mirrors what the library does internally)
+      Wire.begin();
+      Wire.setClock(100000);
+      delay(100);
+      Serial.println(F("  Wire.begin() + setClock(100kHz) done"));
+
+      // Step 1: Detect
+      Wire.beginTransmission(0x77);
+      uint8_t bErr = Wire.endTransmission();
+      Serial.print(F("  1. Detect 0x77: err="));
+      Serial.println(bErr);
+
+      // Step 2: Soft reset
+      Wire.beginTransmission(0x77);
+      Wire.write(0xE0);
+      Wire.write(0xB6);
+      bErr = Wire.endTransmission();
+      Serial.print(F("  2. Soft reset: err="));
+      Serial.println(bErr);
+      delay(20);
+
+      // Step 3: Chip ID
+      Wire.beginTransmission(0x77);
+      Wire.write(0xD0);
+      bErr = Wire.endTransmission(true);
+      Serial.print(F("  3. Chip ID write: err="));
+      Serial.println(bErr);
+      uint8_t bN = Wire.requestFrom((uint8_t)0x77, (uint8_t)1);
+      Serial.print(F("     Chip ID read: "));
+      Serial.print(bN);
+      Serial.print(F(" bytes"));
+      if (bN > 0) {
+        uint8_t cid = Wire.read();
+        Serial.print(F(", val=0x"));
+        Serial.print(cid, HEX);
+        if (cid == 0x61) Serial.print(F(" (BME680)"));
+      }
+      Serial.println();
+
+      // Step 4: Variant ID
+      Wire.beginTransmission(0x77);
+      Wire.write(0xF0);
+      bErr = Wire.endTransmission(true);
+      bN = Wire.requestFrom((uint8_t)0x77, (uint8_t)1);
+      Serial.print(F("  4. Variant ID: "));
+      if (bN > 0) {
+        Serial.print(F("0x"));
+        Serial.println(Wire.read(), HEX);
+      } else {
+        Serial.println(F("FAIL"));
+      }
+
+      // Step 5: Cal block 1 (0x89, 25 bytes)
+      Wire.beginTransmission(0x77);
+      Wire.write(0x89);
+      bErr = Wire.endTransmission(true);
+      bN = Wire.requestFrom((uint8_t)0x77, (uint8_t)25);
+      Serial.print(F("  5. Cal block 1 (25B): got "));
+      Serial.print(bN);
+      Serial.println(F(" bytes"));
+      while (Wire.available()) Wire.read();
+
+      // Step 6: Cal block 2 (0xE1, 16 bytes)
+      Wire.beginTransmission(0x77);
+      Wire.write(0xE1);
+      bErr = Wire.endTransmission(true);
+      bN = Wire.requestFrom((uint8_t)0x77, (uint8_t)16);
+      Serial.print(F("  6. Cal block 2 (16B): got "));
+      Serial.print(bN);
+      Serial.println(F(" bytes"));
+      while (Wire.available()) Wire.read();
+
+      Serial.println(F("--- Raw I2C OK, now trying bme.begin() ---"));
+
+      // Now try bme.begin() — Wire is already up
       bmeFound = false;
 
-      for (uint8_t attempt = 1; attempt <= 5 && !bmeFound; attempt++) {
+      for (uint8_t attempt = 1; attempt <= 3 && !bmeFound; attempt++) {
         Serial.print(F("  BME680 init attempt "));
         Serial.print(attempt);
-        Serial.println(F("/5..."));
+        Serial.println(F("/3..."));
 
         if (bme.begin(0x77)) {
           Serial.println(F("  BME680 Found at 0x77!"));
           bmeFound = true;
-        } else if (bme.begin(0x76)) {
-          Serial.println(F("  BME680 Found at 0x76!"));
-          bmeFound = true;
         } else {
-          Serial.println(F("  bme.begin() failed, recovering bus..."));
-          Wire.end();
-          i2cBusRecover();
-          delay(500);
+          Serial.println(F("  bme.begin() failed"));
+          if (attempt < 3) {
+            Wire.end();
+            i2cBusRecover();
+            delay(500);
+            Wire.begin();
+            Wire.setClock(100000);
+            delay(100);
+          }
         }
       }
 
@@ -1377,17 +1452,6 @@ void processSerialCommands() {
         Serial.println(F("  BME680 configured and ready!"));
       } else {
         Serial.println(F("  FAILED: Could not init BME680."));
-        // Diagnostic I2C scan to show what's on the bus
-        Wire.begin();
-        Wire.setClock(100000);
-        for (uint8_t addr = 1; addr < 127; addr++) {
-          Wire.beginTransmission(addr);
-          if (Wire.endTransmission() == 0) {
-            Serial.print(F("  I2C device at 0x"));
-            if (addr < 16) Serial.print(F("0"));
-            Serial.println(addr, HEX);
-          }
-        }
       }
       Serial.println(F("========================\n"));
     } break;
