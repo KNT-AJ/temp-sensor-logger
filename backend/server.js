@@ -237,7 +237,7 @@ app.post('/api/temps', validateApiKey, async (req, res) => {
               dbTimestamp,
               body.site_id,
               body.device_id,
-              body.level_sensor.sensor_name || 'LS01',
+              body.level_sensor.sensor_name || 'LL01',
               body.level_sensor.pin || 5,
               body.level_sensor.state
             ]
@@ -371,7 +371,7 @@ app.post('/api/temps-http', validateApiKey, async (req, res) => {
               dbTimestamp,
               body.site_id,
               body.device_id,
-              body.level_sensor.sensor_name || 'LS01',
+              body.level_sensor.sensor_name || 'LL01',
               body.level_sensor.pin || 5,
               body.level_sensor.state
             ]
