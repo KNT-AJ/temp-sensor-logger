@@ -1569,12 +1569,89 @@ void setup() {
   i2cBusRecover();
   delay(500); // Give sensor/power rails time to settle
 
-  // Initialize BME680 FIRST, before any Wire.begin() calls.
-  // CRITICAL: The Adafruit library calls Wire.begin() internally.
-  // On the Renesas RA4M1 (Uno R4 WiFi), calling Wire.begin() a second
-  // time re-initializes the I2C peripheral and can leave the BME680 in
-  // a stuck state. So we must let bme.begin() make the FIRST and ONLY
-  // Wire.begin() call, on a bus that was just recovered.
+  // === Step-by-step BME680 I2C diagnostic ===
+  // Mirrors exactly what the Adafruit library does internally, with prints
+  // at each step, so we can identify exactly WHERE bme.begin() fails.
+  Serial.println("=== BME680 I2C Diagnostic ===");
+
+  Wire.begin();
+  Wire.setClock(100000);
+  delay(100);
+  Serial.println("  Wire.begin() + setClock(100kHz) done");
+
+  // Step 1: Detect (same as Adafruit_I2CDevice::detected)
+  Wire.beginTransmission(0x77);
+  uint8_t diagErr = Wire.endTransmission();
+  Serial.print("  1. Detect 0x77: endTransmission=");
+  Serial.println(diagErr);
+
+  // Step 2: Soft reset (same as bme68x_soft_reset)
+  Wire.beginTransmission(0x77);
+  Wire.write(0xE0);  // BME68X_REG_SOFT_RESET
+  Wire.write(0xB6);  // BME68X_SOFT_RESET_CMD
+  diagErr = Wire.endTransmission();
+  Serial.print("  2. Soft reset: endTransmission=");
+  Serial.println(diagErr);
+  delay(20); // Library uses 10ms, give extra margin
+
+  // Step 3: Read chip ID (same as bme68x_init reading BME68X_REG_CHIP_ID)
+  Wire.beginTransmission(0x77);
+  Wire.write(0xD0);  // BME68X_REG_CHIP_ID
+  diagErr = Wire.endTransmission(true); // STOP, like library's write_then_read
+  Serial.print("  3. Chip ID write: endTransmission=");
+  Serial.println(diagErr);
+  uint8_t diagN = Wire.requestFrom((uint8_t)0x77, (uint8_t)1);
+  Serial.print("     Chip ID read: ");
+  Serial.print(diagN);
+  Serial.print(" bytes");
+  if (diagN > 0) {
+    uint8_t chipId = Wire.read();
+    Serial.print(", value=0x");
+    Serial.print(chipId, HEX);
+    if (chipId == 0x61) Serial.print(" (BME680)");
+  }
+  Serial.println();
+
+  // Step 4: Read variant ID
+  Wire.beginTransmission(0x77);
+  Wire.write(0xF0);  // BME68X_REG_VARIANT_ID
+  diagErr = Wire.endTransmission(true);
+  diagN = Wire.requestFrom((uint8_t)0x77, (uint8_t)1);
+  Serial.print("  4. Variant ID: ");
+  if (diagN > 0) {
+    Serial.print("0x");
+    Serial.println(Wire.read(), HEX);
+  } else {
+    Serial.println("FAIL");
+  }
+
+  // Step 5: Read calibration data block 1 (reg 0x89, 25 bytes)
+  Wire.beginTransmission(0x77);
+  Wire.write(0x89);
+  diagErr = Wire.endTransmission(true);
+  diagN = Wire.requestFrom((uint8_t)0x77, (uint8_t)25);
+  Serial.print("  5. Cal block 1 (0x89, 25B): got ");
+  Serial.print(diagN);
+  Serial.println(" bytes");
+
+  // Step 6: Read calibration data block 2 (reg 0xE1, 16 bytes)
+  Wire.beginTransmission(0x77);
+  Wire.write(0xE1);
+  diagErr = Wire.endTransmission(true);
+  diagN = Wire.requestFrom((uint8_t)0x77, (uint8_t)16);
+  Serial.print("  6. Cal block 2 (0xE1, 16B): got ");
+  Serial.print(diagN);
+  Serial.println(" bytes");
+
+  // Flush any remaining Wire data
+  while (Wire.available()) Wire.read();
+
+  Serial.println("=== End Diagnostic ===");
+  Serial.println();
+
+  // Now try bme.begin() with Wire already initialized (don't tear down)
+  // The library will call Wire.begin() again internally, but Wire is
+  // already up, so on Renesas this should be a re-init at default speed.
   Serial.println("Initializing BME680...");
 
   const uint8_t BME_MAX_RETRIES = 5;
@@ -1588,15 +1665,16 @@ void setup() {
     if (bme.begin(0x77)) {
       Serial.println("  BME680 Found at 0x77!");
       bmeFound = true;
-    } else if (bme.begin(0x76)) {
-      Serial.println("  BME680 Found at 0x76!");
-      bmeFound = true;
     } else {
-      Serial.println("  bme.begin() failed, retrying...");
-      // Bus recovery between retries in case the failed begin() left bus dirty
-      Wire.end();
-      i2cBusRecover();
-      delay(500);
+      // Print diagnostic: what did the library manage to read?
+      Serial.print("  FAILED. gas_sensor.chip_id=0x");
+      Serial.println(bme.gas_sensor.chip_id, HEX);
+      if (attempt < BME_MAX_RETRIES) {
+        Serial.println("  Retrying after bus recovery...");
+        Wire.end();
+        i2cBusRecover();
+        delay(500);
+      }
     }
   }
 
