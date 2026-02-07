@@ -1387,25 +1387,28 @@ void processSerialCommands() {
         }
 
         bmeFound = false;
-        delay(250);
+
+        // Manual soft-reset of BME680
+        Wire.beginTransmission(0x77);
+        Wire.write(0xE0);
+        Wire.write(0xB6);
+        Wire.endTransmission();
+        delay(100);
+
         for (uint8_t attempt = 1; attempt <= 5 && !bmeFound; attempt++) {
           Serial.print(F("  BME680 init attempt "));
           Serial.print(attempt);
           Serial.println(F("/5..."));
 
-          // Wire.end + recovery before each attempt
-          Wire.end();
-          i2cBusRecover();
-          delay(500);
-
-          if (bme.begin(0x77)) {
+          if (bme.begin(0x77, &Wire)) {
             Serial.println(F("  BME680 Found at 0x77!"));
             bmeFound = true;
-          } else if (bme.begin(0x76)) {
+          } else if (bme.begin(0x76, &Wire)) {
             Serial.println(F("  BME680 Found at 0x76!"));
             bmeFound = true;
           } else {
             Serial.println(F("  bme.begin() failed"));
+            delay(500);
           }
         }
         if (bmeFound) {
@@ -1417,9 +1420,6 @@ void processSerialCommands() {
           Serial.println(F("  BME680 configured and ready!"));
         } else {
           Serial.println(F("  FAILED: Could not init BME680."));
-          // Ensure Wire is back up
-          Wire.begin();
-          Wire.setClock(100000);
         }
       }
       Serial.println(F("========================\n"));
@@ -1644,14 +1644,19 @@ void setup() {
     }
   }
 
-  // Initialize BME680 (with retries — sensor may need time after power-on)
-  // Wire.end() + recovery before bme.begin() because the Adafruit library
-  // calls Wire.begin() internally, which on the Uno R4 WiFi (Renesas) can
-  // re-initialize the I2C peripheral and undo our recovery.
+  // Initialize BME680 (with retries)
+  // IMPORTANT: Do NOT call Wire.end() between attempts. The Renesas (R4 WiFi)
+  // I2C driver doesn't handle repeated end/begin cycles reliably. Since we've
+  // confirmed Wire works (chip ID reads fine above), keep it running and let
+  // bme.begin() use the existing Wire instance.
   Serial.println("Initializing BME680...");
-  Wire.end();
-  i2cBusRecover();
-  delay(500);
+
+  // Manual soft-reset of BME680 before library init
+  Wire.beginTransmission(0x77);
+  Wire.write(0xE0); // Soft reset register
+  Wire.write(0xB6); // Reset command
+  Wire.endTransmission();
+  delay(100); // Wait for sensor to come back after reset
 
   const uint8_t BME_MAX_RETRIES = 5;
   for (uint8_t attempt = 1; attempt <= BME_MAX_RETRIES && !bmeFound; attempt++) {
@@ -1661,16 +1666,14 @@ void setup() {
     Serial.print(BME_MAX_RETRIES);
     Serial.println("...");
 
-    if (bme.begin(0x77)) {
+    if (bme.begin(0x77, &Wire)) {
       Serial.println("  BME680 Found at 0x77!");
       bmeFound = true;
-    } else if (bme.begin(0x76)) {
+    } else if (bme.begin(0x76, &Wire)) {
       Serial.println("  BME680 Found at 0x76!");
       bmeFound = true;
     } else {
-      Serial.println("  Not detected, recovering bus and retrying...");
-      Wire.end();
-      i2cBusRecover();
+      Serial.println("  bme.begin() failed, retrying...");
       delay(500);
     }
   }
