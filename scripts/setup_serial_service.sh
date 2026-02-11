@@ -34,6 +34,7 @@ WorkingDirectory=$(dirname $SCRIPT_PATH)
 Restart=always
 User=$USER
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
 
 [Install]
 WantedBy=multi-user.target

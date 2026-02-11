@@ -89,7 +89,7 @@ def main():
     while True:
         try:
             if ser.in_waiting > 0:
-                line = ser.readline().decode('utf-8', errors='replace').strip()
+                line = ser.readline().decode('utf-8', errors='ignore').strip()
                 
                 if not line:
                     continue
