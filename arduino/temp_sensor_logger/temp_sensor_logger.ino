@@ -73,7 +73,7 @@ rqXRfboQnoZsG4q5WTP468SQvvG5
 #define DEVICE_ID "arduino_node_01"
 
 // Timing configuration
-#define SAMPLE_INTERVAL_MS 15000  // Sample every 15 seconds
+#define SAMPLE_INTERVAL_MS 10000  // Sample every 10 seconds
 #define WIFI_TIMEOUT_MS 10000     // WiFi connection timeout
 #define UPLOAD_RETRY_MAX 5        // Max upload retries
 #define UPLOAD_RETRY_BASE_MS 1000 // Base retry delay (exponential backoff)
@@ -481,28 +481,28 @@ void setupWiFi() {
   }
 }
 
-// void checkWiFiConnection() {
-//   bool currentlyConnected = (WiFi.status() == WL_CONNECTED);
+void checkWiFiConnection() {
+  bool currentlyConnected = (WiFi.status() == WL_CONNECTED);
 
-//   if (currentlyConnected && !wifiConnected) {
-//     Serial.println("WiFi reconnected!");
-//     Serial.print("IP Address: ");
-//     Serial.println(WiFi.localIP());
-//     wifiConnected = true;
-//   } else if (!currentlyConnected && wifiConnected) {
-//     Serial.println("WiFi disconnected - will retry");
-//     wifiConnected = false;
-//     // Don't immediately reconnect - let the next check handle it
-//   } else if (!currentlyConnected) {
-//     // Still disconnected, check if we should retry
-//     static unsigned long lastReconnectAttempt = 0;
-//     if (millis() - lastReconnectAttempt > 10000) {
-//       Serial.println("Retrying WiFi connection...");
-//       WiFi.begin(WIFI_SSID, WIFI_PASS);
-//       lastReconnectAttempt = millis();
-//     }
-//   }
-// }
+  if (currentlyConnected && !wifiConnected) {
+    Serial.println("WiFi reconnected!");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+    wifiConnected = true;
+  } else if (!currentlyConnected && wifiConnected) {
+    Serial.println("WiFi disconnected - will retry");
+    wifiConnected = false;
+    // Don't immediately reconnect - let the next check handle it
+  } else if (!currentlyConnected) {
+    // Still disconnected, check if we should retry
+    static unsigned long lastReconnectAttempt = 0;
+    if (millis() - lastReconnectAttempt > 10000) {
+      Serial.println("Retrying WiFi connection...");
+      WiFi.begin(WIFI_SSID, WIFI_PASS);
+      lastReconnectAttempt = millis();
+    }
+  }
+}
 
 // ============================================================================
 // SD CARD FUNCTIONS
@@ -1323,7 +1323,8 @@ void processSerialCommands() {
         Wire.beginTransmission(addr);
         if (Wire.endTransmission() == 0) {
           Serial.print(F("  Device found at 0x"));
-          if (addr < 16) Serial.print(F("0"));
+          if (addr < 16)
+            Serial.print(F("0"));
           Serial.println(addr, HEX);
           count++;
         }
@@ -1347,7 +1348,8 @@ void processSerialCommands() {
 
       Wire.begin();
       Wire.setClock(100000);
-      Wire.setWireTimeout(25000); // 25ms — critical for multi-byte reads on Renesas
+      Wire.setWireTimeout(
+          25000); // 25ms — critical for multi-byte reads on Renesas
       delay(100);
 
       bmeFound = false;
@@ -1388,7 +1390,8 @@ void processSerialCommands() {
           Wire.beginTransmission(addr);
           if (Wire.endTransmission() == 0) {
             Serial.print(F("  I2C device at 0x"));
-            if (addr < 16) Serial.print(F("0"));
+            if (addr < 16)
+              Serial.print(F("0"));
             Serial.println(addr, HEX);
           }
         }
@@ -1589,7 +1592,8 @@ void setup() {
   Serial.println("Initializing BME680...");
 
   const uint8_t BME_MAX_RETRIES = 5;
-  for (uint8_t attempt = 1; attempt <= BME_MAX_RETRIES && !bmeFound; attempt++) {
+  for (uint8_t attempt = 1; attempt <= BME_MAX_RETRIES && !bmeFound;
+       attempt++) {
     Serial.print("  Attempt ");
     Serial.print(attempt);
     Serial.print("/");
@@ -1625,7 +1629,8 @@ void setup() {
     Wire.beginTransmission(addr);
     if (Wire.endTransmission() == 0) {
       Serial.print("  I2C device at 0x");
-      if (addr < 16) Serial.print("0");
+      if (addr < 16)
+        Serial.print("0");
       Serial.println(addr, HEX);
       i2cCount++;
     }
@@ -1664,7 +1669,7 @@ void loop() {
   processSerialCommands();
 
   // Check WiFi connection
-  // checkWiFiConnection();
+  checkWiFiConnection();
 
   // Non-blocking sample timing (skip if paused)
   if (!loggingPaused && (currentTime - lastSampleTime >= SAMPLE_INTERVAL_MS)) {
