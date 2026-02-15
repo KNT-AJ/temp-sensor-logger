@@ -214,7 +214,7 @@ def main():
                     except json.JSONDecodeError:
                         print(f"[ERROR] Invalid JSON received")
                         
-                # Case 2: CSV Data (Recovery/Dump)
+                # Case 2: CSV Data (Recovery)
                 # Check for timestamp format at start of line: YYYY-MM-DDTHH:MM:SS
                 elif re.match(r'\d{4}-\d{2}-\d{2}T', line):
                     payload = parse_csv_line(line)
