@@ -38,18 +38,35 @@ def fetch_latest_timestamp():
     """Fetches the timestamp of the last recorded reading from Heroku."""
     try:
         headers = {"X-API-Key": API_KEY}
-        # Assuming an endpoint /api/temps?limit=1 exists and returns valid JSON
-        # If not, we might need to rely on local state or just be careful.
-        # For now, we'll try to get it, or default to epoch if failed.
         response = requests.get(f"{HEROKU_URL}?limit=1", headers=headers, timeout=5)
         
         if response.status_code == 200:
             data = response.json()
             if 'readings' in data and len(data['readings']) > 0:
                 # Assuming descending order
-                latest = data['readings'][0].get('timestamp')
-                print(f"[INIT] Latest DB timestamp: {latest}")
-                return latest
+                latest_utc_str = data['readings'][0].get('timestamp')
+                print(f"[INIT] Latest DB timestamp (UTC): {latest_utc_str}")
+                
+                # Convert UTC string to Central Naive string for comparison with Arduino
+                try:
+                    # Handle 'Z' if present (Python < 3.11 compat)
+                    clean_str = latest_utc_str.replace('Z', '+00:00')
+                    dt_utc = datetime.fromisoformat(clean_str)
+                    
+                    # If naive, assume UTC (Heroku standard)
+                    if dt_utc.tzinfo is None:
+                        dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+                        
+                    dt_central = dt_utc.astimezone(CENTRAL_TZ)
+                    # Return as YYYY-MM-DDTHH:MM:SS (naive)
+                    latest_local = dt_central.strftime('%Y-%m-%dT%H:%M:%S')
+                    print(f"[INIT] Normalized to Central: {latest_local}")
+                    return latest_local
+                    
+                except Exception as e:
+                    print(f"[WARN] Timestamp parse error: {e}. Defaulting to raw string.")
+                    return latest_utc_str
+                    
     except Exception as e:
         print(f"[WARN] Could not fetch latest timestamp: {e}")
     
