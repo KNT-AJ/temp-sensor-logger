@@ -1513,10 +1513,16 @@ void sampleAndLog() {
     }
   }
 
-  // Print level sensor
+  // Print level sensor with raw pin value for diagnostics
+  int rawLevel = digitalRead(LEVEL_SENSOR_PIN);
   Serial.print(LEVEL_SENSOR_NAME);
   Serial.print(": ");
-  Serial.println(levelState ? "LIQUID DETECTED" : "NO LIQUID");
+  Serial.print(levelState ? "LIQUID DETECTED" : "NO LIQUID");
+  Serial.print(" (pin");
+  Serial.print(LEVEL_SENSOR_PIN);
+  Serial.print("=");
+  Serial.print(rawLevel);
+  Serial.println(")");
 
   if (bmeSuccess) {
     Serial.print("  ATM01 (BME680): ");
