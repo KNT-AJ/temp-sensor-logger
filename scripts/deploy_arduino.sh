@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Always restart the service, even if compile/upload fails
+trap 'echo "Restarting temp-logger-serial service..."; sudo systemctl start temp-logger-serial' EXIT
+
 # Configuration
 SKETCH_PATH="arduino/temp_sensor_logger/temp_sensor_logger.ino"
 BOARD_FQBN="arduino:renesas_uno:unor4wifi"
@@ -38,6 +41,7 @@ arduino-cli lib install "OneWire"
 arduino-cli lib install "DallasTemperature"
 arduino-cli lib install "ArduinoJson"
 arduino-cli lib install "Adafruit BME680 Library"
+arduino-cli lib install "Time"
 
 # 5. Compile
 echo "Compiling sketch..."
@@ -49,8 +53,4 @@ echo "Uploading sketch to $PORT..."
 sleep 2
 arduino-cli upload -p $PORT --fqbn $BOARD_FQBN $SKETCH_PATH
 
-# 7. Restart Service
-echo "Restarting temp-logger-serial service..."
-sudo systemctl start temp-logger-serial
-
-echo "Done! Monitor with: journalctl -u temp-logger-serial -f"
+echo "Done! Service will restart automatically. Monitor with: journalctl -u temp-logger-serial -f"
