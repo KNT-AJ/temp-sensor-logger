@@ -42,6 +42,7 @@ arduino-cli lib install "DallasTemperature"
 arduino-cli lib install "ArduinoJson"
 arduino-cli lib install "Adafruit BME680 Library"
 arduino-cli lib install "Time"
+arduino-cli lib install "SD"
 
 # 5. Compile
 echo "Compiling sketch..."
