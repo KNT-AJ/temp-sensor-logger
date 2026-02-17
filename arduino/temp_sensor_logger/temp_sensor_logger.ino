@@ -27,7 +27,12 @@
 // CONFIGURATION - Modify these values for your setup
 // ============================================================================
 
-// WiFi credentials
+// WiFi — set to 0 to disable (Pi handles uploads via USB serial)
+// With the Pi connected to Ethernet via TP-Link extender, Arduino WiFi
+// is unnecessary and wastes ~10s per sample cycle on reconnect attempts.
+#define WIFI_ENABLED 0
+
+// WiFi credentials (only used when WIFI_ENABLED is 1)
 #define WIFI_SSID "myHotSpot"
 #define WIFI_PASS "ki11erWing$"
 
@@ -1650,8 +1655,12 @@ void setup() {
   // Initialize SD card
   setupSD();
 
-  // Connect to WiFi
+  // Connect to WiFi (disabled when Pi handles uploads via serial)
+#if WIFI_ENABLED
   setupWiFi();
+#else
+  Serial.println("WiFi DISABLED — Pi handles uploads via USB serial");
+#endif
 
   // Discover temperature sensors
   discoverSensors();
@@ -1668,8 +1677,10 @@ void loop() {
   // Process serial commands (D=dump, L=list, P=pause, S=status, H=help)
   processSerialCommands();
 
-  // Check WiFi connection
+  // Check WiFi connection (disabled when Pi handles uploads)
+#if WIFI_ENABLED
   checkWiFiConnection();
+#endif
 
   // Non-blocking sample timing (skip if paused)
   if (!loggingPaused && (currentTime - lastSampleTime >= SAMPLE_INTERVAL_MS)) {
