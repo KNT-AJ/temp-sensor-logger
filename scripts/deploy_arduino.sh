@@ -4,7 +4,13 @@ set -e
 # Configuration
 SKETCH_PATH="arduino/temp_sensor_logger/temp_sensor_logger.ino"
 BOARD_FQBN="arduino:renesas_uno:unor4wifi"
-PORT="/dev/ttyACM1"
+PORT=${1:-/dev/ttyACM0}
+
+echo "Using port: $PORT"
+
+# 0. Stop the service to free the serial port
+echo "Stopping temp-logger-serial service..."
+sudo systemctl stop temp-logger-serial || true
 
 # 1. Install Arduino CLI if not present
 if ! command -v arduino-cli &> /dev/null; then
@@ -26,9 +32,12 @@ arduino-cli core install arduino:renesas_uno
 
 # 4. Install Libraries
 echo "Installing/Updating libraries..."
+# Check if lib exists before installing to save time? 
+# CLI handles idempotency reasonably well, but it's slow.
 arduino-cli lib install "OneWire"
 arduino-cli lib install "DallasTemperature"
 arduino-cli lib install "ArduinoJson"
+arduino-cli lib install "Adafruit BME680 Library"
 
 # 5. Compile
 echo "Compiling sketch..."
@@ -40,4 +49,8 @@ echo "Uploading sketch to $PORT..."
 sleep 2
 arduino-cli upload -p $PORT --fqbn $BOARD_FQBN $SKETCH_PATH
 
-echo "Done! Monitor with: arduino-cli monitor -p $PORT -c 115200"
+# 7. Restart Service
+echo "Restarting temp-logger-serial service..."
+sudo systemctl start temp-logger-serial
+
+echo "Done! Monitor with: journalctl -u temp-logger-serial -f"
