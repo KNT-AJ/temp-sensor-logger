@@ -1472,8 +1472,9 @@ void sampleAndLog() {
     }
   }
 
-  // Read level sensor (XKC-Y25-T12V is active-LOW: LOW = liquid detected)
-  bool levelState = (digitalRead(LEVEL_SENSOR_PIN) == LOW);
+  // Read level sensor (XKC-Y25-T12V: HIGH = liquid detected, RED LED = no
+  // detect)
+  bool levelState = (digitalRead(LEVEL_SENSOR_PIN) == HIGH);
 
   // Print summary — flush first to avoid interleaving with prior output
   Serial.flush();
