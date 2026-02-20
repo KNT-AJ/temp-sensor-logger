@@ -199,76 +199,7 @@ def main():
     except Exception as e:
         print(f"[WARN] Failed to sync time: {e}")
 
-    # NOTE: BME Re-init (B command) is deferred until AFTER backfill to avoid
-    # potential I2C bus recovery interference with the SD card SPI bus.
-
-    # One-time backfill: dump 2/19 gap data if not already done
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    gap_csv = os.path.join(script_dir, "gap_20260219.csv")
-    if not os.path.exists(gap_csv):
-        try:
-            # IMPORTANT: Drain serial output for 15s WITHOUT sleeping (sleeping
-            # lets TX buffer fill up and blocks the Arduino mid-Serial.print).
-            print("[BACKFILL] Draining serial for 15s before sending F command...")
-            drain_until = time.time() + 15
-            while time.time() < drain_until:
-                if ser.in_waiting > 0:
-                    drained = ser.readline().decode('utf-8', errors='ignore').strip()
-                    if drained:
-                        print(f"[BACKFILL-DRAIN] {drained[:100]}")
-                else:
-                    time.sleep(0.05)
-
-            # Use F command (single-day dump) — firmware dumpFile() bug is now fixed
-            print("[BACKFILL] Sending F20260219 (single-day dump)...")
-            ser.write(b"F20260219\n")
-            header = "timestamp,device_id,sensor_name,bus,pin,rom,raw_temp_c,cal_temp_c,status,humidity,pressure_hpa,gas_ohms"
-            gap_lines = []
-            dump_started = False
-            dump_timeout = time.time() + 1200  # 20 min max for single day
-            last_progress_log = time.time()
-            while time.time() < dump_timeout:
-                line = ser.readline().decode('utf-8', errors='ignore').strip()
-                if not line:
-                    if time.time() - last_progress_log > 60:
-                        elapsed = int(time.time() - (dump_timeout - 1200))
-                        print(f"[BACKFILL] Still waiting... {len(gap_lines)} lines, {elapsed}s elapsed")
-                        last_progress_log = time.time()
-                    continue
-                # Log non-data lines so we can see what Arduino is saying
-                if not line.startswith("2026-"):
-                    print(f"[BACKFILL-RCV] {line[:120]}")
-                if "FILE DUMP START" in line:
-                    dump_started = True
-                    print("[BACKFILL] Dump stream started!")
-                    continue
-                if "FILE DUMP END" in line:
-                    print(f"[BACKFILL] Dump complete: {len(gap_lines)} lines captured.")
-                    break
-                # Collect only 2/19 lines
-                if dump_started and line.startswith("2026-"):
-                    gap_lines.append(line)
-                    if len(gap_lines) % 5000 == 0:
-                        print(f"[BACKFILL] {len(gap_lines)} lines...")
-            if gap_lines:
-                with open(gap_csv, 'w') as f:
-                    f.write(header + "\n")
-                    f.write("\n".join(gap_lines) + "\n")
-                print(f"[BACKFILL] Saved {len(gap_lines)} lines to {gap_csv}")
-                backfill_script = os.path.join(script_dir, "backfill_sd_data.py")
-                db_url = os.environ.get("DATABASE_URL", "")
-                if db_url and os.path.exists(backfill_script):
-                    print("[BACKFILL] Running backfill_sd_data.py...")
-                    ret = os.system(f'DATABASE_URL="{db_url}" python3 "{backfill_script}" "{gap_csv}"')
-                    print(f"[BACKFILL] Done (exit code {ret})")
-                else:
-                    print("[BACKFILL] DATABASE_URL not set — CSV saved, run backfill_sd_data.py manually.")
-            else:
-                print("[BACKFILL] No data captured. Check [BACKFILL-RCV] lines above.")
-        except Exception as e:
-            print(f"[BACKFILL] Error: {e}")
-
-    # BME Re-init (deferred until after backfill)
+    # BME Re-init (I2C bus recovery + bme.begin)
     try:
         print("[BME] Sending BME680 re-init command (B)...")
         ser.write(b"B\n")
