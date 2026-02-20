@@ -21,8 +21,35 @@ def find_port():
     candidates = sorted(glob.glob('/dev/ttyACM*'))
     return candidates[0] if candidates else '/dev/ttyACM0'
 
+def wait_for_vanish(port, timeout=10):
+    """Wait for port to disappear. Returns True if it vanished."""
+    for i in range(timeout * 2):
+        if not os.path.exists(port):
+            return True
+        time.sleep(0.5)
+    return False
+
+def wait_for_appear(port, timeout=30):
+    """Wait for port to appear. Returns the actual port found (may differ)."""
+    for i in range(timeout):
+        # Check all ACM ports in case it comes back on a different number
+        candidates = sorted(glob.glob('/dev/ttyACM*'))
+        if candidates:
+            return candidates[0]
+        time.sleep(1)
+        if i % 5 == 4:
+            print(f"[RESET] Waiting for port... ({i+1}s)")
+    return None
+
 def arduino_reset(port):
-    """Force Arduino hardware reset via 1200bps touch (open+close at 1200 baud)."""
+    """Force Arduino hardware reset via 1200bps touch.
+
+    The Uno R4 WiFi (Renesas RA4M1) does a DOUBLE USB enumeration:
+      1. 1200bps touch -> MCU enters bootloader -> port vanishes, reappears (bootloader USB)
+      2. Bootloader times out (~8s) -> sketch starts -> port vanishes, reappears (sketch USB)
+    We must wait for the SECOND reappearance before opening the port,
+    otherwise we connect to the bootloader's dead file descriptor.
+    """
     print(f"[RESET] Opening {port} at 1200 baud to trigger bootloader reset...")
     try:
         s = serial.Serial(port, 1200)
@@ -30,39 +57,44 @@ def arduino_reset(port):
         time.sleep(0.5)
         s.close()
         print("[RESET] Port closed. Waiting for Arduino to reboot...")
+        time.sleep(1)
 
-        # The port may vanish briefly as the Arduino resets and re-enumerates USB.
-        # Wait for it to disappear, then wait for it to come back.
-        time.sleep(2)
-
-        # Wait for port to vanish (may already have)
-        gone = False
-        for i in range(10):
-            if not os.path.exists(port):
-                gone = True
-                print(f"[RESET] Port vanished (good - Arduino is resetting).")
-                break
-            time.sleep(0.5)
-
-        if not gone:
+        # --- First enumeration: bootloader ---
+        if wait_for_vanish(port, timeout=10):
+            print("[RESET] Port vanished (bootloader starting).")
+        else:
             print("[RESET] Port never vanished - may not have fully reset. Continuing...")
 
-        # Wait for port to reappear
-        for i in range(30):
-            if os.path.exists(port):
-                # Port file exists, but the device may not be ready yet.
-                # Wait a bit more for the CDC ACM driver to bind.
-                time.sleep(3)
-                print(f"[RESET] Port {port} is back.")
-                return True
-            time.sleep(1)
-            print(f"[RESET] Waiting for port... ({i+1}s)")
+        found = wait_for_appear(port, timeout=15)
+        if not found:
+            print("[RESET] Port did not reappear after reset!")
+            return None
+        print(f"[RESET] Port {found} appeared (bootloader USB).")
 
-        print("[RESET] Port did not reappear!")
-        return False
+        # --- Second enumeration: sketch boot ---
+        # The bootloader times out after ~8s and hands off to the sketch.
+        # The sketch re-initializes USB, causing another vanish/appear cycle.
+        print("[RESET] Waiting for bootloader to hand off to sketch...")
+        if wait_for_vanish(found, timeout=15):
+            print("[RESET] Port vanished (bootloader -> sketch handoff).")
+            found = wait_for_appear(port, timeout=15)
+            if not found:
+                print("[RESET] Port did not reappear after sketch boot!")
+                return None
+            print(f"[RESET] Port {found} appeared (sketch USB). Ready.")
+        else:
+            # Some boards don't double-enumerate; the bootloader port
+            # becomes the sketch port seamlessly. Wait extra time to be safe.
+            print("[RESET] No second vanish detected (may not double-enumerate).")
+            print("[RESET] Waiting 10s for sketch to finish booting...")
+            time.sleep(10)
+
+        # Extra settle time for CDC ACM driver
+        time.sleep(3)
+        return found
     except Exception as e:
         print(f"[RESET] Error: {e}")
-        return False
+        return None
 
 def main():
     port = find_port()
@@ -77,16 +109,18 @@ def main():
 
     # 2. Force Arduino reset
     print("\n[2/5] Resetting Arduino...")
-    if not arduino_reset(port):
+    actual_port = arduino_reset(port)
+    if not actual_port:
         print("FATAL: Could not reset Arduino. Try physical unplug.")
+        subprocess.run(["sudo", "systemctl", "start", "temp-logger-serial"], check=False)
         sys.exit(1)
 
     # 3. Open port and wait for Arduino to boot
-    print(f"\n[3/5] Connecting at {BAUD_RATE} baud...")
+    print(f"\n[3/5] Connecting to {actual_port} at {BAUD_RATE} baud...")
     ser = None
     for attempt in range(5):
         try:
-            ser = serial.Serial(port, BAUD_RATE, timeout=2)
+            ser = serial.Serial(actual_port, BAUD_RATE, timeout=2)
             break
         except (OSError, serial.SerialException) as e:
             print(f"  [RETRY] Open failed ({e}), retrying in 3s... ({attempt+1}/5)")
