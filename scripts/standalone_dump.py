@@ -13,7 +13,8 @@ import subprocess
 import glob
 
 BAUD_RATE = 115200
-TARGET_DATE = "20260219"
+# Usage: python3 standalone_dump.py [YYYYMMDD]
+TARGET_DATE = sys.argv[1] if len(sys.argv) > 1 else "20260219"
 OUTPUT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"gap_{TARGET_DATE}.csv")
 HEADER = "timestamp,device_id,sensor_name,bus,pin,rom,raw_temp_c,cal_temp_c,status,humidity,pressure_hpa,gas_ohms"
 
