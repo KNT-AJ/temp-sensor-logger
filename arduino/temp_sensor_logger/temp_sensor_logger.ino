@@ -1089,13 +1089,26 @@ void dumpFile(const char *path) {
   Serial.print(F(" ("));
   Serial.print(file.size());
   Serial.println(F(" bytes) ---"));
+  Serial.flush();
+  delay(10);
 
+  // Read and send in chunks to prevent USB CDC buffer overflow.
+  // The Uno R4 WiFi (Renesas RA4M1) USB CDC locks up if
+  // Serial.write() is called in a tight loop without flushing.
+  uint8_t buf[128];
   while (file.available()) {
-    Serial.write(file.read());
+    int bytesRead = file.read(buf, sizeof(buf));
+    if (bytesRead > 0) {
+      Serial.write(buf, bytesRead);
+      Serial.flush();
+      delay(2);
+    }
   }
 
   file.close();
+  Serial.flush();
   Serial.println(F("--- End of file ---"));
+  Serial.flush();
 }
 
 void tailCurrentLog() {
@@ -1156,6 +1169,8 @@ void dumpAllLogs() {
   }
 
   Serial.println(F("=== FILE DUMP START ==="));
+  Serial.flush();
+  delay(10);
 
   // Open logs directory
   File logsDir = SD.open("/logs");
@@ -1196,6 +1211,7 @@ void dumpAllLogs() {
   Serial.print(F("Total files dumped: "));
   Serial.println(fileCount);
   Serial.println(F("=== FILE DUMP END ==="));
+  Serial.flush();
 }
 
 void showStatus() {
@@ -1414,8 +1430,11 @@ void processSerialCommands() {
         char filePath[32];
         snprintf(filePath, sizeof(filePath), "/logs/%s.csv", dateArg.c_str());
         Serial.println(F("=== FILE DUMP START ==="));
+        Serial.flush();
+        delay(10);
         dumpFile(filePath);
         Serial.println(F("=== FILE DUMP END ==="));
+        Serial.flush();
       } else {
         Serial.println(F("Usage: F<YYYYMMDD>  e.g. F20260219"));
       }

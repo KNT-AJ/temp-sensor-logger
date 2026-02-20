@@ -207,34 +207,45 @@ def main():
     gap_csv = os.path.join(script_dir, "gap_20260219.csv")
     if not os.path.exists(gap_csv):
         try:
-            # Wait for Arduino to finish current sample cycle before sending F
-            print("[BACKFILL] Waiting 15s for Arduino sample cycle to complete...")
-            time.sleep(15)
-            print("[BACKFILL] Sending F20260219...")
-            ser.write(b"F20260219\n")
+            # IMPORTANT: Drain serial output for 15s WITHOUT sleeping (sleeping
+            # lets TX buffer fill up and blocks the Arduino mid-Serial.print).
+            print("[BACKFILL] Draining serial for 15s before sending D command...")
+            drain_until = time.time() + 15
+            while time.time() < drain_until:
+                if ser.in_waiting > 0:
+                    drained = ser.readline().decode('utf-8', errors='ignore').strip()
+                    if drained:
+                        print(f"[BACKFILL-DRAIN] {drained[:100]}")
+                else:
+                    time.sleep(0.05)
+
+            # Use D command (full dump) — no argument needed, works reliably
+            print("[BACKFILL] Sending D command (full SD dump, filtering 2/19)...")
+            ser.write(b"D\n")
             header = "timestamp,device_id,sensor_name,bus,pin,rom,raw_temp_c,cal_temp_c,status,humidity,pressure_hpa,gas_ohms"
             gap_lines = []
             dump_started = False
-            dump_timeout = time.time() + 1200  # 20 min max (8.3MB SD dump is slow)
+            dump_timeout = time.time() + 1800  # 30 min max for full SD dump
             last_progress_log = time.time()
             while time.time() < dump_timeout:
                 line = ser.readline().decode('utf-8', errors='ignore').strip()
                 if not line:
                     if time.time() - last_progress_log > 60:
-                        elapsed = int(time.time() - (dump_timeout - 1200))
-                        print(f"[BACKFILL] Still waiting... {len(gap_lines)} lines, {elapsed}s elapsed")
+                        elapsed = int(time.time() - (dump_timeout - 1800))
+                        print(f"[BACKFILL] Still dumping... {len(gap_lines)} 2/19 lines, {elapsed}s elapsed")
                         last_progress_log = time.time()
                     continue
-                # Log EVERYTHING so we can see what Arduino is saying
-                if not dump_started or not line.startswith("2026-02-19"):
+                # Log non-data lines so we can see what Arduino is saying
+                if not line.startswith("2026-"):
                     print(f"[BACKFILL-RCV] {line[:120]}")
                 if "FILE DUMP START" in line:
                     dump_started = True
                     print("[BACKFILL] Dump stream started!")
                     continue
-                if "FILE DUMP END" in line or "End of file" in line:
-                    print(f"[BACKFILL] Dump complete: {len(gap_lines)} lines captured.")
+                if "FILE DUMP END" in line:
+                    print(f"[BACKFILL] Dump complete: {len(gap_lines)} 2/19 lines captured.")
                     break
+                # Collect only 2/19 lines
                 if dump_started and line.startswith("2026-02-19"):
                     gap_lines.append(line)
                     if len(gap_lines) % 5000 == 0:
@@ -253,7 +264,7 @@ def main():
                 else:
                     print("[BACKFILL] DATABASE_URL not set — CSV saved, run backfill_sd_data.py manually.")
             else:
-                print("[BACKFILL] No 2/19 data captured. Check [BACKFILL-RCV] lines above for Arduino response.")
+                print("[BACKFILL] No 2/19 data captured. Check [BACKFILL-RCV] lines above.")
         except Exception as e:
             print(f"[BACKFILL] Error: {e}")
 
