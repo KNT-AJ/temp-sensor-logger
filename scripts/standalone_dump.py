@@ -21,6 +21,66 @@ def find_port():
     candidates = sorted(glob.glob('/dev/ttyACM*'))
     return candidates[0] if candidates else '/dev/ttyACM0'
 
+def find_usb_device_path():
+    """Find the Arduino's sysfs USB device path by vendor:product ID."""
+    # Arduino Uno R4 WiFi: 2341:1002
+    import pathlib
+    for dev in pathlib.Path('/sys/bus/usb/devices').iterdir():
+        vid_file = dev / 'idVendor'
+        pid_file = dev / 'idProduct'
+        if vid_file.exists() and pid_file.exists():
+            try:
+                vid = vid_file.read_text().strip()
+                pid = pid_file.read_text().strip()
+                if vid == '2341' and pid in ('1002', '1102'):
+                    return str(dev)
+            except Exception:
+                pass
+    return None
+
+def usb_power_cycle():
+    """Power-cycle the Arduino by toggling USB authorized state.
+
+    On Raspberry Pi 4, deauthorizing a USB device via sysfs cuts VBUS power
+    to that port, causing a real hardware reset of the attached MCU.
+    """
+    dev_path = find_usb_device_path()
+    if not dev_path:
+        print("[USB] Could not find Arduino USB device (2341:1002).")
+        print("[USB] Trying uhubctl as fallback...")
+        # Try uhubctl - may or may not be installed
+        result = subprocess.run(
+            ["uhubctl", "-l", "1-1", "-p", "2", "-a", "cycle", "-d", "3"],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            print("[USB] uhubctl power cycle succeeded.")
+            return True
+        else:
+            print(f"[USB] uhubctl failed: {result.stderr.strip()}")
+            return False
+
+    auth_file = os.path.join(dev_path, 'authorized')
+    dev_name = os.path.basename(dev_path)
+    print(f"[USB] Found Arduino at {dev_name}")
+    print(f"[USB] Deauthorizing USB device (cuts power)...")
+
+    try:
+        # Deauthorize - this disconnects the device and may cut VBUS
+        subprocess.run(["sudo", "tee", auth_file],
+                       input="0\n", text=True, capture_output=True, check=True)
+        time.sleep(3)
+
+        print(f"[USB] Re-authorizing USB device...")
+        subprocess.run(["sudo", "tee", auth_file],
+                       input="1\n", text=True, capture_output=True, check=True)
+        time.sleep(2)
+        print("[USB] USB power cycle complete.")
+        return True
+    except Exception as e:
+        print(f"[USB] Error during power cycle: {e}")
+        return False
+
 def unstick_and_connect(port):
     """Open serial port and drain backed-up data to unstick the Arduino.
 
@@ -46,12 +106,10 @@ def unstick_and_connect(port):
     ser.dtr = True
     time.sleep(0.5)
 
-    # Drain aggressively for up to 30 seconds.
-    # As soon as the host reads, the Arduino's blocked Serial.flush() completes
-    # and its main loop resumes.  We look for ANY output as proof of life.
-    print("[DRAIN] Reading serial for up to 30s to unstick Arduino...")
+    # Drain aggressively for up to 15 seconds.
+    print("[DRAIN] Reading serial for up to 15s to unstick Arduino...")
     got_data = False
-    drain_end = time.time() + 30
+    drain_end = time.time() + 15
     while time.time() < drain_end:
         if ser.in_waiting > 0:
             line = ser.readline().decode('utf-8', errors='ignore').strip()
@@ -62,7 +120,6 @@ def unstick_and_connect(port):
                 print(f"  [DRAIN] {line[:120]}")
         else:
             if got_data:
-                # Got data earlier but nothing now - Arduino has caught up
                 time.sleep(1)
                 if ser.in_waiting == 0:
                     print("[DRAIN] Output settled.")
@@ -70,7 +127,9 @@ def unstick_and_connect(port):
             time.sleep(0.05)
 
     if not got_data:
-        print("[DRAIN] No data received in 30s - Arduino may be unresponsive.")
+        print("[DRAIN] No data received - Arduino is unresponsive.")
+        ser.close()
+        return None
 
     # Probe: send S (status) command to verify bidirectional communication
     print("[PROBE] Sending status command to verify communication...")
@@ -92,11 +151,8 @@ def unstick_and_connect(port):
 
     if probe_ok:
         print("[PROBE] Communication confirmed!")
-    elif got_data:
-        print("[PROBE] No status response but got earlier data -- proceeding anyway.")
     else:
-        print("[PROBE] WARNING: No communication with Arduino at all.")
-        print("[PROBE] You may need to physically unplug/replug the USB cable.")
+        print("[PROBE] No status response but got drain data -- proceeding anyway.")
 
     # Drain any remaining probe output
     flush_end = time.time() + 3
@@ -119,13 +175,43 @@ def main():
     subprocess.run(["sudo", "systemctl", "stop", "temp-logger-serial"], check=False)
     time.sleep(2)
 
-    # 2. Connect and unstick Arduino
+    # 2. Try to connect and unstick Arduino
     print("\n[2/4] Connecting to Arduino...")
     ser = unstick_and_connect(port)
+
     if ser is None:
-        print("FATAL: Could not open serial port after 5 attempts.")
-        subprocess.run(["sudo", "systemctl", "start", "temp-logger-serial"], check=False)
-        sys.exit(1)
+        # Arduino is hard-stuck. Try USB power cycle to force hardware reset.
+        print("\n[2/4] Arduino unresponsive. Attempting USB power cycle...")
+        if usb_power_cycle():
+            # Wait for port to reappear after power cycle
+            print("[USB] Waiting for Arduino to reboot...")
+            time.sleep(5)
+            for i in range(30):
+                candidates = sorted(glob.glob('/dev/ttyACM*'))
+                if candidates:
+                    port = candidates[0]
+                    print(f"[USB] Port {port} is back!")
+                    break
+                time.sleep(1)
+                if i % 5 == 4:
+                    print(f"[USB] Waiting for port... ({i+1}s)")
+            else:
+                print("FATAL: Port did not reappear after USB power cycle.")
+                subprocess.run(["sudo", "systemctl", "start", "temp-logger-serial"], check=False)
+                sys.exit(1)
+
+            # Wait for Arduino to finish booting (sensor discovery, etc.)
+            time.sleep(5)
+
+            # Try connecting again - this time it should be a fresh boot
+            print("[USB] Connecting after power cycle...")
+            ser = unstick_and_connect(port)
+
+        if ser is None:
+            print("FATAL: Could not communicate with Arduino.")
+            print("You need to physically unplug and replug the USB cable.")
+            subprocess.run(["sudo", "systemctl", "start", "temp-logger-serial"], check=False)
+            sys.exit(1)
 
     # 3. Send F command
     print(f"\n[3/4] Sending F{TARGET_DATE} command...")
