@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Standalone SD card dump for backfill recovery.
-Stops the service, forces an Arduino reset via 1200bps touch,
-opens the port fresh, sends F20260219, and saves to CSV.
+Stops the service, opens the serial port, drains any backed-up
+output to unstick the Arduino, sends F20260219, and saves to CSV.
 """
 import serial
 import serial.tools.list_ports
@@ -21,80 +21,92 @@ def find_port():
     candidates = sorted(glob.glob('/dev/ttyACM*'))
     return candidates[0] if candidates else '/dev/ttyACM0'
 
-def wait_for_vanish(port, timeout=10):
-    """Wait for port to disappear. Returns True if it vanished."""
-    for i in range(timeout * 2):
-        if not os.path.exists(port):
-            return True
-        time.sleep(0.5)
-    return False
+def unstick_and_connect(port):
+    """Open serial port and drain backed-up data to unstick the Arduino.
 
-def wait_for_appear(port, timeout=30):
-    """Wait for port to appear. Returns the actual port found (may differ)."""
-    for i in range(timeout):
-        # Check all ACM ports in case it comes back on a different number
-        candidates = sorted(glob.glob('/dev/ttyACM*'))
-        if candidates:
-            return candidates[0]
-        time.sleep(1)
-        if i % 5 == 4:
-            print(f"[RESET] Waiting for port... ({i+1}s)")
-    return None
-
-def arduino_reset(port):
-    """Force Arduino hardware reset via 1200bps touch.
-
-    The Uno R4 WiFi (Renesas RA4M1) does a DOUBLE USB enumeration:
-      1. 1200bps touch -> MCU enters bootloader -> port vanishes, reappears (bootloader USB)
-      2. Bootloader times out (~8s) -> sketch starts -> port vanishes, reappears (sketch USB)
-    We must wait for the SECOND reappearance before opening the port,
-    otherwise we connect to the bootloader's dead file descriptor.
+    When the service stops and nobody reads the serial port, the Arduino's
+    uploadBatch() blocks in Serial.flush() waiting for the USB host to drain
+    the CDC TX buffer.  Opening the port and reading aggressively unblocks it.
     """
-    print(f"[RESET] Opening {port} at 1200 baud to trigger bootloader reset...")
-    try:
-        s = serial.Serial(port, 1200)
-        s.dtr = False  # Drop DTR
-        time.sleep(0.5)
-        s.close()
-        print("[RESET] Port closed. Waiting for Arduino to reboot...")
-        time.sleep(1)
-
-        # --- First enumeration: bootloader ---
-        if wait_for_vanish(port, timeout=10):
-            print("[RESET] Port vanished (bootloader starting).")
-        else:
-            print("[RESET] Port never vanished - may not have fully reset. Continuing...")
-
-        found = wait_for_appear(port, timeout=15)
-        if not found:
-            print("[RESET] Port did not reappear after reset!")
-            return None
-        print(f"[RESET] Port {found} appeared (bootloader USB).")
-
-        # --- Second enumeration: sketch boot ---
-        # The bootloader times out after ~8s and hands off to the sketch.
-        # The sketch re-initializes USB, causing another vanish/appear cycle.
-        print("[RESET] Waiting for bootloader to hand off to sketch...")
-        if wait_for_vanish(found, timeout=15):
-            print("[RESET] Port vanished (bootloader -> sketch handoff).")
-            found = wait_for_appear(port, timeout=15)
-            if not found:
-                print("[RESET] Port did not reappear after sketch boot!")
-                return None
-            print(f"[RESET] Port {found} appeared (sketch USB). Ready.")
-        else:
-            # Some boards don't double-enumerate; the bootloader port
-            # becomes the sketch port seamlessly. Wait extra time to be safe.
-            print("[RESET] No second vanish detected (may not double-enumerate).")
-            print("[RESET] Waiting 10s for sketch to finish booting...")
-            time.sleep(10)
-
-        # Extra settle time for CDC ACM driver
-        time.sleep(3)
-        return found
-    except Exception as e:
-        print(f"[RESET] Error: {e}")
+    print(f"[CONNECT] Opening {port} at {BAUD_RATE} baud...")
+    ser = None
+    for attempt in range(5):
+        try:
+            ser = serial.Serial(port, BAUD_RATE, timeout=2)
+            break
+        except (OSError, serial.SerialException) as e:
+            print(f"  [RETRY] Open failed ({e}), retrying in 3s... ({attempt+1}/5)")
+            time.sleep(3)
+    if ser is None:
         return None
+
+    # Toggle DTR to signal a fresh host connection
+    ser.dtr = False
+    time.sleep(0.1)
+    ser.dtr = True
+    time.sleep(0.5)
+
+    # Drain aggressively for up to 30 seconds.
+    # As soon as the host reads, the Arduino's blocked Serial.flush() completes
+    # and its main loop resumes.  We look for ANY output as proof of life.
+    print("[DRAIN] Reading serial for up to 30s to unstick Arduino...")
+    got_data = False
+    drain_end = time.time() + 30
+    while time.time() < drain_end:
+        if ser.in_waiting > 0:
+            line = ser.readline().decode('utf-8', errors='ignore').strip()
+            if line:
+                if not got_data:
+                    print("[DRAIN] Arduino is alive! Draining backed-up output...")
+                    got_data = True
+                print(f"  [DRAIN] {line[:120]}")
+        else:
+            if got_data:
+                # Got data earlier but nothing now - Arduino has caught up
+                time.sleep(1)
+                if ser.in_waiting == 0:
+                    print("[DRAIN] Output settled.")
+                    break
+            time.sleep(0.05)
+
+    if not got_data:
+        print("[DRAIN] No data received in 30s - Arduino may be unresponsive.")
+
+    # Probe: send S (status) command to verify bidirectional communication
+    print("[PROBE] Sending status command to verify communication...")
+    ser.write(b"S\n")
+    ser.flush()
+    probe_end = time.time() + 10
+    probe_ok = False
+    while time.time() < probe_end:
+        if ser.in_waiting > 0:
+            line = ser.readline().decode('utf-8', errors='ignore').strip()
+            if line:
+                print(f"  [PROBE] {line[:120]}")
+                if "System Status" in line or "Status" in line or "Board:" in line:
+                    probe_ok = True
+        else:
+            if probe_ok:
+                break
+            time.sleep(0.05)
+
+    if probe_ok:
+        print("[PROBE] Communication confirmed!")
+    elif got_data:
+        print("[PROBE] No status response but got earlier data -- proceeding anyway.")
+    else:
+        print("[PROBE] WARNING: No communication with Arduino at all.")
+        print("[PROBE] You may need to physically unplug/replug the USB cable.")
+
+    # Drain any remaining probe output
+    flush_end = time.time() + 3
+    while time.time() < flush_end:
+        if ser.in_waiting > 0:
+            ser.readline()
+        else:
+            time.sleep(0.05)
+
+    return ser
 
 def main():
     port = find_port()
@@ -103,65 +115,20 @@ def main():
     print(f"Output: {OUTPUT_FILE}")
 
     # 1. Stop the service
-    print("\n[1/5] Stopping temp-logger-serial service...")
+    print("\n[1/4] Stopping temp-logger-serial service...")
     subprocess.run(["sudo", "systemctl", "stop", "temp-logger-serial"], check=False)
     time.sleep(2)
 
-    # 2. Force Arduino reset
-    print("\n[2/5] Resetting Arduino...")
-    actual_port = arduino_reset(port)
-    if not actual_port:
-        print("FATAL: Could not reset Arduino. Try physical unplug.")
-        subprocess.run(["sudo", "systemctl", "start", "temp-logger-serial"], check=False)
-        sys.exit(1)
-
-    # 3. Open port and wait for Arduino to boot
-    print(f"\n[3/5] Connecting to {actual_port} at {BAUD_RATE} baud...")
-    ser = None
-    for attempt in range(5):
-        try:
-            ser = serial.Serial(actual_port, BAUD_RATE, timeout=2)
-            break
-        except (OSError, serial.SerialException) as e:
-            print(f"  [RETRY] Open failed ({e}), retrying in 3s... ({attempt+1}/5)")
-            time.sleep(3)
+    # 2. Connect and unstick Arduino
+    print("\n[2/4] Connecting to Arduino...")
+    ser = unstick_and_connect(port)
     if ser is None:
         print("FATAL: Could not open serial port after 5 attempts.")
         subprocess.run(["sudo", "systemctl", "start", "temp-logger-serial"], check=False)
         sys.exit(1)
-    time.sleep(2)  # Give Arduino a moment after USB CDC comes up
 
-    # Read boot messages for up to 20 seconds
-    print("[BOOT] Reading Arduino boot output...")
-    boot_end = time.time() + 20
-    saw_init_complete = False
-    while time.time() < boot_end:
-        if ser.in_waiting > 0:
-            line = ser.readline().decode('utf-8', errors='ignore').strip()
-            if line:
-                print(f"  [BOOT] {line[:120]}")
-                if "Initialization complete" in line or "Starting main loop" in line:
-                    saw_init_complete = True
-                    break
-        else:
-            time.sleep(0.05)
-
-    if not saw_init_complete:
-        print("[WARN] Did not see 'Initialization complete'. Continuing anyway...")
-
-    # Drain any remaining boot output
-    print("[DRAIN] Draining remaining output for 5s...")
-    drain_end = time.time() + 5
-    while time.time() < drain_end:
-        if ser.in_waiting > 0:
-            line = ser.readline().decode('utf-8', errors='ignore').strip()
-            if line:
-                print(f"  [DRAIN] {line[:120]}")
-        else:
-            time.sleep(0.05)
-
-    # 4. Send F command
-    print(f"\n[4/5] Sending F{TARGET_DATE} command...")
+    # 3. Send F command
+    print(f"\n[3/4] Sending F{TARGET_DATE} command...")
     cmd = f"F{TARGET_DATE}\n".encode('utf-8')
     ser.write(cmd)
     ser.flush()
@@ -211,11 +178,11 @@ def main():
         with open(OUTPUT_FILE, 'w') as f:
             f.write(HEADER + "\n")
             f.write("\n".join(lines) + "\n")
-        print(f"\n[5/5] Saved {len(lines)} lines to {OUTPUT_FILE}")
+        print(f"\n[4/4] Saved {len(lines)} lines to {OUTPUT_FILE}")
         print(f"\nNext: run backfill_sd_data.py to insert into DB:")
         print(f'  DATABASE_URL="$DATABASE_URL" python3 {os.path.join(os.path.dirname(os.path.abspath(__file__)), "backfill_sd_data.py")} "{OUTPUT_FILE}"')
     else:
-        print("\n[5/5] No data captured. Nothing to save.")
+        print("\n[4/4] No data captured. Nothing to save.")
 
     # Restart the service
     print("\nRestarting temp-logger-serial service...")
