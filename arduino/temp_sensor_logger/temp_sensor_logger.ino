@@ -1019,6 +1019,7 @@ bool loggingPaused = false;
 void printHelp() {
   Serial.println(F("\n=== Serial Commands ==="));
   Serial.println(F("  D - Dump all log files to serial"));
+  Serial.println(F("  F<YYYYMMDD> - Dump single day log (e.g. F20260219)"));
   Serial.println(F("  L - List files on SD card"));
   Serial.println(F("  P - Pause/Resume logging"));
   Serial.println(F("  S - Show status"));
@@ -1402,6 +1403,22 @@ void processSerialCommands() {
         }
       }
       Serial.println(F("========================\n"));
+    } break;
+
+    case 'F':
+    case 'f': {
+      // Dump a single day's log file: F<YYYYMMDD>  e.g. F20260219
+      String dateArg = Serial.readStringUntil('\n');
+      dateArg.trim();
+      if (dateArg.length() == 8) {
+        char filePath[32];
+        snprintf(filePath, sizeof(filePath), "/logs/%s.csv", dateArg.c_str());
+        Serial.println(F("=== FILE DUMP START ==="));
+        dumpFile(filePath);
+        Serial.println(F("=== FILE DUMP END ==="));
+      } else {
+        Serial.println(F("Usage: F<YYYYMMDD>  e.g. F20260219"));
+      }
     } break;
 
     case 'H':
