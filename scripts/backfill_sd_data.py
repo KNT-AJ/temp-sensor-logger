@@ -63,6 +63,7 @@ def parse_csv(filepath):
 
 def backfill(filepath, database_url):
     """Insert missing rows from the CSV into the database."""
+    import psycopg2.extras
     temp_rows, level_rows, env_rows = parse_csv(filepath)
     total = len(temp_rows) + len(level_rows) + len(env_rows)
     print(f"Parsed {total} rows from {filepath}")
@@ -74,21 +75,54 @@ def backfill(filepath, database_url):
         print("Nothing to backfill.")
         return
 
+    # Find min and max timestamps to narrow down our query
+    all_ts = []
+    for r in temp_rows + level_rows + env_rows:
+        ts = r["timestamp"].strip()
+        if not ts.startswith("UPTIME"):
+            all_ts.append(ts)
+    
+    if not all_ts:
+        print("No valid timestamps found.")
+        return
+
+    min_ts = min(all_ts)
+    max_ts = max(all_ts)
+
     conn = psycopg2.connect(database_url, sslmode="require")
     cur = conn.cursor()
+
+    def get_existing(table_name):
+        cur.execute(f"""
+            SELECT to_char(timestamp at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), sensor_name 
+            FROM {table_name} 
+            WHERE timestamp >= %s AND timestamp <= %s
+        """, (min_ts, max_ts))
+        return set((row[0], row[1]) for row in cur.fetchall())
+
+    print(f"Fetching existing records between {min_ts} and {max_ts}...")
+    existing_temp = get_existing("temperature_readings")
+    existing_level = get_existing("level_sensor_readings")
+    existing_env = get_existing("environment_readings")
 
     inserted = {"temp": 0, "level": 0, "env": 0}
     skipped = {"temp": 0, "level": 0, "env": 0}
 
     # --- Temperature readings ---
+    temp_to_insert = []
     for row in temp_rows:
         ts = row["timestamp"].strip()
         if ts.startswith("UPTIME"):
             skipped["temp"] += 1
             continue
 
-        device_id = row.get("device_id", "arduino_node_01").strip()
         sensor_name = row["sensor_name"].strip()
+        
+        if (ts, sensor_name) in existing_temp:
+            skipped["temp"] += 1
+            continue
+
+        device_id = row.get("device_id", "arduino_node_01").strip()
         bus = row.get("bus", "").strip()
         pin = row.get("pin", "0").strip()
         rom = row.get("rom", "").strip()
@@ -99,65 +133,69 @@ def backfill(filepath, database_url):
         raw_val = float(raw_temp) if raw_temp and raw_temp != "null" else None
         cal_val = float(cal_temp) if cal_temp and cal_temp != "null" else None
 
-        # Check if row already exists
-        cur.execute(
-            """SELECT 1 FROM temperature_readings
-               WHERE timestamp = %s AND sensor_name = %s
-               LIMIT 1""",
-            (ts, sensor_name),
-        )
-        if cur.fetchone():
-            skipped["temp"] += 1
-            continue
+        temp_to_insert.append((ts, SITE_ID, device_id, sensor_name, bus, int(pin), rom, raw_val, cal_val, status))
 
-        cur.execute(
+    if temp_to_insert:
+        print(f"Inserting {len(temp_to_insert)} temperature readings...")
+        psycopg2.extras.execute_values(
+            cur,
             """INSERT INTO temperature_readings
                (timestamp, site_id, device_id, sensor_name, bus, pin, rom, raw_temp_c, temp_c, status)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (ts, SITE_ID, device_id, sensor_name, bus, int(pin), rom, raw_val, cal_val, status),
+               VALUES %s""",
+            temp_to_insert,
+            page_size=1000
         )
-        inserted["temp"] += 1
+        inserted["temp"] += len(temp_to_insert)
+        conn.commit()
 
     # --- Level sensor readings ---
+    level_to_insert = []
     for row in level_rows:
         ts = row["timestamp"].strip()
         if ts.startswith("UPTIME"):
             skipped["level"] += 1
             continue
 
-        device_id = row.get("device_id", "arduino_node_01").strip()
         sensor_name = row["sensor_name"].strip()
-        pin = row.get("pin", "5").strip()
-        # Level state is stored in the "status" column of the CSV
-        state = row.get("status", "NONE").strip()
-
-        cur.execute(
-            """SELECT 1 FROM level_sensor_readings
-               WHERE timestamp = %s AND sensor_name = %s
-               LIMIT 1""",
-            (ts, sensor_name),
-        )
-        if cur.fetchone():
+        
+        if (ts, sensor_name) in existing_level:
             skipped["level"] += 1
             continue
 
-        cur.execute(
+        device_id = row.get("device_id", "arduino_node_01").strip()
+        pin = row.get("pin", "5").strip()
+        state = row.get("status", "NONE").strip()
+
+        level_to_insert.append((ts, SITE_ID, device_id, sensor_name, int(pin), state))
+
+    if level_to_insert:
+        print(f"Inserting {len(level_to_insert)} level readings...")
+        psycopg2.extras.execute_values(
+            cur,
             """INSERT INTO level_sensor_readings
                (timestamp, site_id, device_id, sensor_name, pin, state)
-               VALUES (%s, %s, %s, %s, %s, %s)""",
-            (ts, SITE_ID, device_id, sensor_name, int(pin), state),
+               VALUES %s""",
+            level_to_insert,
+            page_size=1000
         )
-        inserted["level"] += 1
+        inserted["level"] += len(level_to_insert)
+        conn.commit()
 
     # --- Environment readings ---
+    env_to_insert = []
     for row in env_rows:
         ts = row["timestamp"].strip()
         if ts.startswith("UPTIME"):
             skipped["env"] += 1
             continue
 
-        device_id = row.get("device_id", "arduino_node_01").strip()
         sensor_name = row["sensor_name"].strip()
+        
+        if (ts, sensor_name) in existing_env:
+            skipped["env"] += 1
+            continue
+
+        device_id = row.get("device_id", "arduino_node_01").strip()
         raw_temp = row.get("raw_temp_c", "").strip()
         humidity = row.get("humidity", "").strip()
         pressure = row.get("pressure_hpa", "").strip()
@@ -168,25 +206,21 @@ def backfill(filepath, database_url):
         pres_val = float(pressure) if pressure and pressure != "null" else None
         gas_val = float(gas) if gas and gas != "null" else None
 
-        cur.execute(
-            """SELECT 1 FROM environment_readings
-               WHERE timestamp = %s AND sensor_name = %s
-               LIMIT 1""",
-            (ts, sensor_name),
-        )
-        if cur.fetchone():
-            skipped["env"] += 1
-            continue
+        env_to_insert.append((ts, SITE_ID, device_id, sensor_name, temp_val, hum_val, pres_val, gas_val))
 
-        cur.execute(
+    if env_to_insert:
+        print(f"Inserting {len(env_to_insert)} environment readings...")
+        psycopg2.extras.execute_values(
+            cur,
             """INSERT INTO environment_readings
                (timestamp, site_id, device_id, sensor_name, temp_c, humidity, pressure_hpa, gas_resistance_ohms)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-            (ts, SITE_ID, device_id, sensor_name, temp_val, hum_val, pres_val, gas_val),
+               VALUES %s""",
+            env_to_insert,
+            page_size=1000
         )
-        inserted["env"] += 1
+        inserted["env"] += len(env_to_insert)
+        conn.commit()
 
-    conn.commit()
     cur.close()
     conn.close()
 
