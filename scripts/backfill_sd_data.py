@@ -21,6 +21,20 @@ import sys
 from datetime import datetime
 
 try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
+
+def get_central_offset(ts_str):
+    """
+    Returns the string offset (like '-06:00' or '-05:00') for America/Chicago
+    at the given naive local time string (YYYY-MM-DDTHH:MM:SS)
+    """
+    dt_naive = datetime.fromisoformat(ts_str)
+    dt_aware = dt_naive.replace(tzinfo=ZoneInfo("America/Chicago"))
+    return dt_aware.strftime('%z')[:3] + ':' + dt_aware.strftime('%z')[3:]
+
+try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
@@ -133,7 +147,8 @@ def backfill(filepath, database_url):
         raw_val = float(raw_temp) if raw_temp and raw_temp != "null" else None
         cal_val = float(cal_temp) if cal_temp and cal_temp != "null" else None
 
-        temp_to_insert.append((ts, SITE_ID, device_id, sensor_name, bus, int(pin), rom, raw_val, cal_val, status))
+        db_ts = ts + get_central_offset(ts)
+        temp_to_insert.append((db_ts, SITE_ID, device_id, sensor_name, bus, int(pin), rom, raw_val, cal_val, status))
 
     if temp_to_insert:
         print(f"Inserting {len(temp_to_insert)} temperature readings...")
@@ -166,7 +181,8 @@ def backfill(filepath, database_url):
         pin = row.get("pin", "5").strip()
         state = row.get("status", "NONE").strip()
 
-        level_to_insert.append((ts, SITE_ID, device_id, sensor_name, int(pin), state))
+        db_ts = ts + get_central_offset(ts)
+        level_to_insert.append((db_ts, SITE_ID, device_id, sensor_name, int(pin), state))
 
     if level_to_insert:
         print(f"Inserting {len(level_to_insert)} level readings...")
@@ -206,7 +222,8 @@ def backfill(filepath, database_url):
         pres_val = float(pressure) if pressure and pressure != "null" else None
         gas_val = float(gas) if gas and gas != "null" else None
 
-        env_to_insert.append((ts, SITE_ID, device_id, sensor_name, temp_val, hum_val, pres_val, gas_val))
+        db_ts = ts + get_central_offset(ts)
+        env_to_insert.append((db_ts, SITE_ID, device_id, sensor_name, temp_val, hum_val, pres_val, gas_val))
 
     if env_to_insert:
         print(f"Inserting {len(env_to_insert)} environment readings...")
