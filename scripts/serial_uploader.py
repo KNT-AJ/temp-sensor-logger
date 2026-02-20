@@ -199,20 +199,18 @@ def main():
     except Exception as e:
         print(f"[WARN] Failed to sync time: {e}")
 
-    # BME Re-init
-    try:
-        print("[BME] Sending BME680 re-init command (B)...")
-        ser.write(b"B\n")
-        time.sleep(4)
-    except Exception as e:
-        print(f"[WARN] Failed to send BME re-init: {e}")
+    # NOTE: BME Re-init (B command) is deferred until AFTER backfill to avoid
+    # potential I2C bus recovery interference with the SD card SPI bus.
 
     # One-time backfill: dump 2/19 gap data if not already done
     script_dir = os.path.dirname(os.path.abspath(__file__))
     gap_csv = os.path.join(script_dir, "gap_20260219.csv")
     if not os.path.exists(gap_csv):
         try:
-            print("[BACKFILL] gap_20260219.csv not found — triggering SD dump for 2/19...")
+            # Wait for Arduino to finish current sample cycle before sending F
+            print("[BACKFILL] Waiting 15s for Arduino sample cycle to complete...")
+            time.sleep(15)
+            print("[BACKFILL] Sending F20260219...")
             ser.write(b"F20260219\n")
             header = "timestamp,device_id,sensor_name,bus,pin,rom,raw_temp_c,cal_temp_c,status,humidity,pressure_hpa,gas_ohms"
             gap_lines = []
@@ -222,15 +220,17 @@ def main():
             while time.time() < dump_timeout:
                 line = ser.readline().decode('utf-8', errors='ignore').strip()
                 if not line:
-                    # Log progress every 60s so journalctl shows we're alive
                     if time.time() - last_progress_log > 60:
                         elapsed = int(time.time() - (dump_timeout - 1200))
-                        print(f"[BACKFILL] Still dumping... {len(gap_lines)} lines, {elapsed}s elapsed")
+                        print(f"[BACKFILL] Still waiting... {len(gap_lines)} lines, {elapsed}s elapsed")
                         last_progress_log = time.time()
                     continue
+                # Log EVERYTHING so we can see what Arduino is saying
+                if not dump_started or not line.startswith("2026-02-19"):
+                    print(f"[BACKFILL-RCV] {line[:120]}")
                 if "FILE DUMP START" in line:
                     dump_started = True
-                    print("[BACKFILL] Dump stream started.")
+                    print("[BACKFILL] Dump stream started!")
                     continue
                 if "FILE DUMP END" in line or "End of file" in line:
                     print(f"[BACKFILL] Dump complete: {len(gap_lines)} lines captured.")
@@ -244,7 +244,6 @@ def main():
                     f.write(header + "\n")
                     f.write("\n".join(gap_lines) + "\n")
                 print(f"[BACKFILL] Saved {len(gap_lines)} lines to {gap_csv}")
-                # Run backfill script
                 backfill_script = os.path.join(script_dir, "backfill_sd_data.py")
                 db_url = os.environ.get("DATABASE_URL", "")
                 if db_url and os.path.exists(backfill_script):
@@ -252,11 +251,19 @@ def main():
                     ret = os.system(f'DATABASE_URL="{db_url}" python3 "{backfill_script}" "{gap_csv}"')
                     print(f"[BACKFILL] Done (exit code {ret})")
                 else:
-                    print("[BACKFILL] DATABASE_URL not set or backfill script missing — CSV saved, run manually.")
+                    print("[BACKFILL] DATABASE_URL not set — CSV saved, run backfill_sd_data.py manually.")
             else:
-                print("[BACKFILL] No 2/19 data captured (dump may have already completed or file not found on SD).")
+                print("[BACKFILL] No 2/19 data captured. Check [BACKFILL-RCV] lines above for Arduino response.")
         except Exception as e:
-            print(f"[BACKFILL] Error during backfill dump: {e}")
+            print(f"[BACKFILL] Error: {e}")
+
+    # BME Re-init (deferred until after backfill)
+    try:
+        print("[BME] Sending BME680 re-init command (B)...")
+        ser.write(b"B\n")
+        time.sleep(4)
+    except Exception as e:
+        print(f"[WARN] Failed to send BME re-init: {e}")
 
     while True:
         try:
