@@ -40,12 +40,12 @@ def arduino_reset(port):
         for i in range(10):
             if not os.path.exists(port):
                 gone = True
-                print(f"[RESET] Port vanished (good — Arduino is resetting).")
+                print(f"[RESET] Port vanished (good - Arduino is resetting).")
                 break
             time.sleep(0.5)
 
         if not gone:
-            print("[RESET] Port never vanished — may not have fully reset. Continuing...")
+            print("[RESET] Port never vanished - may not have fully reset. Continuing...")
 
         # Wait for port to reappear
         for i in range(30):
