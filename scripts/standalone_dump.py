@@ -30,11 +30,29 @@ def arduino_reset(port):
         time.sleep(0.5)
         s.close()
         print("[RESET] Port closed. Waiting for Arduino to reboot...")
-        time.sleep(5)  # Wait for bootloader to time out and start sketch
 
-        # Wait for port to reappear (it may briefly vanish)
-        for i in range(20):
+        # The port may vanish briefly as the Arduino resets and re-enumerates USB.
+        # Wait for it to disappear, then wait for it to come back.
+        time.sleep(2)
+
+        # Wait for port to vanish (may already have)
+        gone = False
+        for i in range(10):
+            if not os.path.exists(port):
+                gone = True
+                print(f"[RESET] Port vanished (good — Arduino is resetting).")
+                break
+            time.sleep(0.5)
+
+        if not gone:
+            print("[RESET] Port never vanished — may not have fully reset. Continuing...")
+
+        # Wait for port to reappear
+        for i in range(30):
             if os.path.exists(port):
+                # Port file exists, but the device may not be ready yet.
+                # Wait a bit more for the CDC ACM driver to bind.
+                time.sleep(3)
                 print(f"[RESET] Port {port} is back.")
                 return True
             time.sleep(1)
@@ -65,8 +83,19 @@ def main():
 
     # 3. Open port and wait for Arduino to boot
     print(f"\n[3/5] Connecting at {BAUD_RATE} baud...")
-    ser = serial.Serial(port, BAUD_RATE, timeout=2)
-    time.sleep(1)
+    ser = None
+    for attempt in range(5):
+        try:
+            ser = serial.Serial(port, BAUD_RATE, timeout=2)
+            break
+        except (OSError, serial.SerialException) as e:
+            print(f"  [RETRY] Open failed ({e}), retrying in 3s... ({attempt+1}/5)")
+            time.sleep(3)
+    if ser is None:
+        print("FATAL: Could not open serial port after 5 attempts.")
+        subprocess.run(["sudo", "systemctl", "start", "temp-logger-serial"], check=False)
+        sys.exit(1)
+    time.sleep(2)  # Give Arduino a moment after USB CDC comes up
 
     # Read boot messages for up to 20 seconds
     print("[BOOT] Reading Arduino boot output...")
