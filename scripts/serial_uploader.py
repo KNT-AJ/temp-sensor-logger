@@ -217,20 +217,27 @@ def main():
             header = "timestamp,device_id,sensor_name,bus,pin,rom,raw_temp_c,cal_temp_c,status,humidity,pressure_hpa,gas_ohms"
             gap_lines = []
             dump_started = False
-            dump_timeout = time.time() + 300  # 5 min max
+            dump_timeout = time.time() + 1200  # 20 min max (8.3MB SD dump is slow)
+            last_progress_log = time.time()
             while time.time() < dump_timeout:
                 line = ser.readline().decode('utf-8', errors='ignore').strip()
                 if not line:
+                    # Log progress every 60s so journalctl shows we're alive
+                    if time.time() - last_progress_log > 60:
+                        elapsed = int(time.time() - (dump_timeout - 1200))
+                        print(f"[BACKFILL] Still dumping... {len(gap_lines)} lines, {elapsed}s elapsed")
+                        last_progress_log = time.time()
                     continue
                 if "FILE DUMP START" in line:
                     dump_started = True
+                    print("[BACKFILL] Dump stream started.")
                     continue
                 if "FILE DUMP END" in line or "End of file" in line:
                     print(f"[BACKFILL] Dump complete: {len(gap_lines)} lines captured.")
                     break
                 if dump_started and line.startswith("2026-02-19"):
                     gap_lines.append(line)
-                    if len(gap_lines) % 2000 == 0:
+                    if len(gap_lines) % 5000 == 0:
                         print(f"[BACKFILL] {len(gap_lines)} lines...")
             if gap_lines:
                 with open(gap_csv, 'w') as f:
