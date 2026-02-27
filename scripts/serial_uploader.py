@@ -32,29 +32,26 @@ last_processed_timestamp = "1970-01-01T00:00:00"
 last_clock_sync_time = 0  # epoch seconds; 0 = never synced
 
 def sync_clock(ser):
-    """Send a DST-aware Central Time epoch to the Arduino.
+    """Send a UTC epoch to the Arduino for clock synchronisation.
 
-    We send `utc_epoch + ct_offset_seconds` so the Arduino simply calls
-    setTime(received_value) — its clock then represents Central Time without
-    needing a hard-coded TIMEZONE_OFFSET that doesn't account for DST.
+    The current Arduino firmware (C-command handler) applies TIMEZONE_OFFSET
+    itself: setTime(receivedTime + TIMEZONE_OFFSET).  So we must send the raw
+    UTC epoch — the Arduino converts it to Central Time internally.
 
-    The Arduino firmware should call setTime(receivedTime) directly (i.e.
-    TIMEZONE_OFFSET in the C-command handler is 0, because we've already
-    baked the offset in here).
+    NOTE: Once the Arduino is re-flashed with the updated firmware (which calls
+    setTime(receivedTime) directly, no offset), switch this back to sending
+    central_epoch = utc_epoch + ct_offset_seconds so DST is handled properly.
     """
     global last_clock_sync_time
     try:
         now_utc = datetime.now(timezone.utc)
         now_central = now_utc.astimezone(CENTRAL_TZ)
         utc_epoch = int(now_utc.timestamp())
-        # ct_offset_seconds is negative for CT (e.g. -21600 CST, -18000 CDT)
-        ct_offset_seconds = int(now_central.utcoffset().total_seconds())
-        central_epoch = utc_epoch + ct_offset_seconds
         tz_name = now_central.strftime('%Z')
-        utc_offset_hours = ct_offset_seconds // 3600
+        utc_offset_hours = int(now_central.utcoffset().total_seconds()) // 3600
         print(f"[CLOCK] Syncing Arduino clock ({tz_name}, UTC{utc_offset_hours:+d})"
-              f" -> central_epoch={central_epoch}")
-        ser.write(f"C{central_epoch}\n".encode('utf-8'))
+              f" -> utc_epoch={utc_epoch}")
+        ser.write(f"C{utc_epoch}\n".encode('utf-8'))
         time.sleep(0.5)
         last_clock_sync_time = time.time()
     except Exception as e:
