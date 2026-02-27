@@ -97,8 +97,10 @@ rqXRfboQnoZsG4q5WTP468SQvvG5
 // Upload queue configuration (ring buffer)
 #define UPLOAD_QUEUE_SIZE 10
 
-// Timezone offset in seconds (0 = UTC, -21600 = CST, -18000 = EST, -28800 =
-// PST)
+// Timezone offset in seconds (kept for documentation; no longer applied in the
+// C-command clock handler — the Pi pre-adjusts the epoch to Central Time using
+// DST-aware ZoneInfo before sending, so setTime() receives the correct value
+// directly. 0 = UTC, -21600 = CST, -18000 = CDT, -28800 = PST)
 #define TIMEZONE_OFFSET -21600
 
 // ============================================================================
@@ -1304,9 +1306,11 @@ void processSerialCommands() {
       if (timeStr.length() > 0) {
         long receivedTime = timeStr.toInt();
         if (receivedTime > 1000000000) { // Valid roughly post-2001
-          setTime(receivedTime + TIMEZONE_OFFSET);
+          // Pi sends epoch already adjusted to Central Time (DST-aware),
+          // so we set the clock directly — no TIMEZONE_OFFSET needed here.
+          setTime(receivedTime);
           Serial.print(F("Time synced to: "));
-          Serial.println(receivedTime + TIMEZONE_OFFSET);
+          Serial.println(receivedTime);
           // Force log file rotation check immediately
           memset(currentLogDate, 0, sizeof(currentLogDate));
         } else {

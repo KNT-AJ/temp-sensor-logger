@@ -22,8 +22,43 @@ HEROKU_URL = "https://temp-logger-1770077582-8b1b2ec536f6.herokuapp.com/api/temp
 API_KEY = "36e6e1669f7302366f067627383705a0"
 SITE_ID = "industrial_site_01"
 
+# How often to re-send clock-sync to the Arduino (seconds).
+# Arduino's TimeLib clock drifts a few seconds/hour; syncing every 10 min
+# keeps accumulated drift well under 1 second per interval.
+CLOCK_SYNC_INTERVAL_S = 600  # 10 minutes
+
 # Global state
 last_processed_timestamp = "1970-01-01T00:00:00"
+last_clock_sync_time = 0  # epoch seconds; 0 = never synced
+
+def sync_clock(ser):
+    """Send a DST-aware Central Time epoch to the Arduino.
+
+    We send `utc_epoch + ct_offset_seconds` so the Arduino simply calls
+    setTime(received_value) — its clock then represents Central Time without
+    needing a hard-coded TIMEZONE_OFFSET that doesn't account for DST.
+
+    The Arduino firmware should call setTime(receivedTime) directly (i.e.
+    TIMEZONE_OFFSET in the C-command handler is 0, because we've already
+    baked the offset in here).
+    """
+    global last_clock_sync_time
+    try:
+        now_utc = datetime.now(timezone.utc)
+        now_central = now_utc.astimezone(CENTRAL_TZ)
+        utc_epoch = int(now_utc.timestamp())
+        # ct_offset_seconds is negative for CT (e.g. -21600 CST, -18000 CDT)
+        ct_offset_seconds = int(now_central.utcoffset().total_seconds())
+        central_epoch = utc_epoch + ct_offset_seconds
+        tz_name = now_central.strftime('%Z')
+        utc_offset_hours = ct_offset_seconds // 3600
+        print(f"[CLOCK] Syncing Arduino clock ({tz_name}, UTC{utc_offset_hours:+d})"
+              f" -> central_epoch={central_epoch}")
+        ser.write(f"C{central_epoch}\n".encode('utf-8'))
+        time.sleep(0.5)
+        last_clock_sync_time = time.time()
+    except Exception as e:
+        print(f"[WARN] Failed to sync time: {e}")
 
 def find_arduino_port():
     """Auto-detect Arduino serial port (ttyACM0, ttyACM1, etc.)"""
@@ -186,18 +221,8 @@ def main():
         print(f"[ERROR] Could not open serial port {port}: {e}")
         sys.exit(1)
 
-    # Sync Time
-    try:
-        now_utc = datetime.now(timezone.utc)
-        now_central = now_utc.astimezone(CENTRAL_TZ)
-        utc_epoch = int(time.time())
-        tz_name = now_central.strftime('%Z')
-        utc_offset_hours = int(now_central.utcoffset().total_seconds()) // 3600
-        print(f"[CLOCK] Syncing time ({tz_name}, UTC{utc_offset_hours:+d}) epoch={utc_epoch}")
-        ser.write(f"C{utc_epoch}\n".encode('utf-8'))
-        time.sleep(0.5)
-    except Exception as e:
-        print(f"[WARN] Failed to sync time: {e}")
+    # Initial clock sync
+    sync_clock(ser)
 
     # BME Re-init (I2C bus recovery + bme.begin)
     try:
@@ -209,6 +234,10 @@ def main():
 
     while True:
         try:
+            # Periodic clock re-sync — keeps Arduino drift < ~1 s per interval
+            if time.time() - last_clock_sync_time >= CLOCK_SYNC_INTERVAL_S:
+                sync_clock(ser)
+
             if ser.in_waiting > 0:
                 line = ser.readline().decode('utf-8', errors='ignore').strip()
                 
