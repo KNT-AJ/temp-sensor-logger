@@ -73,22 +73,27 @@ def fetch_latest_timestamp():
         if response.status_code == 200:
             data = response.json()
             if 'readings' in data and len(data['readings']) > 0:
-                # Assuming descending order
                 latest_utc_str = data['readings'][0].get('timestamp')
                 print(f"[INIT] Latest DB timestamp (UTC): {latest_utc_str}")
                 
-                # Convert UTC string to Central Naive string for comparison with Arduino
                 try:
-                    # Handle 'Z' if present (Python < 3.11 compat)
                     clean_str = latest_utc_str.replace('Z', '+00:00')
                     dt_utc = datetime.fromisoformat(clean_str)
                     
-                    # If naive, assume UTC (Heroku standard)
                     if dt_utc.tzinfo is None:
                         dt_utc = dt_utc.replace(tzinfo=timezone.utc)
-                        
+                    
+                    # Guard: if the DB timestamp is more than 5 minutes in the
+                    # future (e.g. from a past clock-error), clamp it to now so
+                    # deduplication doesn't block all incoming correct data.
+                    now_utc = datetime.now(timezone.utc)
+                    if dt_utc > now_utc:
+                        skew_mins = (dt_utc - now_utc).total_seconds() / 60
+                        print(f"[WARN] Latest DB timestamp is {skew_mins:.1f} min in the future — "
+                              f"resetting deduplication window to avoid blocking new data.")
+                        dt_utc = now_utc
+
                     dt_central = dt_utc.astimezone(CENTRAL_TZ)
-                    # Return as YYYY-MM-DDTHH:MM:SS (naive)
                     latest_local = dt_central.strftime('%Y-%m-%dT%H:%M:%S')
                     print(f"[INIT] Normalized to Central: {latest_local}")
                     return latest_local
