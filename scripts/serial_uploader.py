@@ -32,26 +32,24 @@ last_processed_timestamp = "1970-01-01T00:00:00"
 last_clock_sync_time = 0  # epoch seconds; 0 = never synced
 
 def sync_clock(ser):
-    """Send a UTC epoch to the Arduino for clock synchronisation.
+    """Send a Central Time epoch to the Arduino for clock synchronisation.
 
-    The current Arduino firmware (C-command handler) applies TIMEZONE_OFFSET
-    itself: setTime(receivedTime + TIMEZONE_OFFSET).  So we must send the raw
-    UTC epoch — the Arduino converts it to Central Time internally.
-
-    NOTE: Once the Arduino is re-flashed with the updated firmware (which calls
-    setTime(receivedTime) directly, no offset), switch this back to sending
-    central_epoch = utc_epoch + ct_offset_seconds so DST is handled properly.
+    The reflashed firmware (C-command handler) calls setTime(receivedTime)
+    directly with no offset applied, so we must send the epoch expressed as
+    Central Time (i.e. UTC epoch + CT offset seconds) so the Arduino clock
+    displays the correct local time.  DST is handled via ZoneInfo.
     """
     global last_clock_sync_time
     try:
         now_utc = datetime.now(timezone.utc)
         now_central = now_utc.astimezone(CENTRAL_TZ)
-        utc_epoch = int(now_utc.timestamp())
+        ct_offset_seconds = int(now_central.utcoffset().total_seconds())
+        central_epoch = int(now_utc.timestamp()) + ct_offset_seconds
         tz_name = now_central.strftime('%Z')
-        utc_offset_hours = int(now_central.utcoffset().total_seconds()) // 3600
+        utc_offset_hours = ct_offset_seconds // 3600
         print(f"[CLOCK] Syncing Arduino clock ({tz_name}, UTC{utc_offset_hours:+d})"
-              f" -> utc_epoch={utc_epoch}")
-        ser.write(f"C{utc_epoch}\n".encode('utf-8'))
+              f" -> central_epoch={central_epoch}")
+        ser.write(f"C{central_epoch}\n".encode('utf-8'))
         time.sleep(0.5)
         last_clock_sync_time = time.time()
     except Exception as e:
