@@ -122,20 +122,20 @@ float calOffset[CAL_SENSOR_COUNT] = {
 };
 
 // Sensor name mapping: index -> TD name
-// A1=TD03, A2=TD05, A3=TD04, A4=TD01, A5=TD02
+// A1=TD03, A2=TD04, A3=TD01, A4=TD02, A5=TD05
 // B1=TD09, B2=TD07, B3=TD10, B4=TD08, B5=TD06
 const char *sensorNames[CAL_SENSOR_COUNT] = {
-    "TD03", "TD05", "TD04", "TD01", "TD02", // Bus A
+    "TD03", "TD04", "TD01", "TD02", "TD05", // Bus A
     "TD09", "TD07", "TD10", "TD08", "TD06"  // Bus B
 };
 
 // Display order: maps display position (0-9) to sensor index
 // Position 0=TD01, 1=TD02, 2=TD03, etc.
-// TD01=A4(idx 3), TD02=A5(idx 4), TD03=A1(idx 0), TD04=A3(idx 2), TD05=A2(idx
-// 1) TD06=B5(idx 9), TD07=B2(idx 6), TD08=B4(idx 8), TD09=B1(idx 5),
+// TD01=A3(idx 2), TD02=A4(idx 3), TD03=A1(idx 0), TD04=A2(idx 1), TD05=A5(idx
+// 4) TD06=B5(idx 9), TD07=B2(idx 6), TD08=B4(idx 8), TD09=B1(idx 5),
 // TD10=B3(idx 7)
 const uint8_t displayOrder[CAL_SENSOR_COUNT] = {
-    3, 4, 0, 2, 1, // TD01-TD05 sensor indices
+    2, 3, 0, 1, 4, // TD01-TD05 sensor indices
     9, 6, 8, 5, 7  // TD06-TD10 sensor indices
 };
 
